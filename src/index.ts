@@ -16,11 +16,11 @@ app.use(helmet());
 // Initialize partner service before setting up routes
 PartnerService.initialize();
 
-app.use(express.json());
-
-//app.use(corsConfig);
-
+// Apply routes BEFORE global JSON middleware to allow webhook routes to handle raw bodies
 app.use(appConfig.apiV1URL, v1Router);
+
+// Apply JSON middleware for non-webhook routes
+app.use(express.json());
 
 app.get("/", (req, res) => {
   const message = "Welcome to Finance Tracker Backend Service";
