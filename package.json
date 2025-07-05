@@ -17,10 +17,22 @@
   "description": "",
   "dependencies": {
     "@prisma/client": "^6.11.1",
+    "axios": "^1.10.0",
+    "bcryptjs": "^3.0.2",
+    "cors": "^2.8.5",
+    "crypto": "^1.0.1",
+    "date-fns": "^4.1.0",
+    "decimal.js": "^10.5.0",
     "dotenv": "^17.0.1",
     "express": "^5.1.0",
+    "express-rate-limit": "^7.5.1",
     "helmet": "^8.1.0",
+    "ioredis": "^5.6.1",
+    "joi": "^17.13.3",
+    "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.16.1",
+    "redis": "^5.5.6",
+    "socket.io": "^4.8.1",
     "winston": "^3.17.0"
   },
   "devDependencies": {

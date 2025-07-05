@@ -13,3 +13,237 @@ datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
 }
+
+model User {
+  id              String   @id @default(uuid())
+  email           String?  @unique
+  phoneNumber     String?  @unique @map("phone_number")
+  firstName       String   @map("first_name")
+  lastName        String   @map("last_name")
+  profilePicture  String?  @map("profile_picture")
+  isActive        Boolean  @default(true) @map("is_active")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  transactions    Transaction[]
+  categories      Category[]
+  recipients      Recipient[]
+  budgets         Budget[]
+  apiTokens       ApiToken[]
+  auditLogs       AuditLog[]
+  aiInsights      AiInsight[]
+  notifications   Notification[]
+
+  @@map("users")
+}
+
+model Category {
+  id          String   @id @default(uuid())
+  name        String
+  description String?
+  color       String?  // For UI representation
+  icon        String?  // Icon identifier
+  userId      String   @map("user_id")
+  isDefault   Boolean  @default(false) @map("is_default") // System default categories
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+  budgets      Budget[]
+
+  @@unique([userId, name])
+  @@map("categories")
+}
+
+model Recipient {
+  id          String   @id @default(uuid())
+  name        String
+  type        String   // "person", "business", "merchant", "service"
+  email       String?
+  phoneNumber String?  @map("phone_number")
+  address     String?
+  userId      String   @map("user_id")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([userId, name])
+  @@map("recipients")
+}
+
+model Transaction {
+  id          String      @id @default(uuid())
+  amount      Decimal     @db.Decimal(10, 2)
+  type        String      // "income", "expense", "transfer"
+  description String?
+  notes       String?
+  date        DateTime
+  userId      String      @map("user_id")
+  categoryId  String?     @map("category_id")
+  recipientId String?     @map("recipient_id")
+  tags        String[]    // Array of tags like ["birthday", "urgent", "recurring"]
+  isRecurring Boolean     @default(false) @map("is_recurring")
+  recurringId String?     @map("recurring_id") // Link to recurring transaction template
+  location    String?     // GPS coordinates or address
+  createdAt   DateTime    @default(now()) @map("created_at")
+  updatedAt   DateTime    @updatedAt @map("updated_at")
+
+  // Relations
+  user      User       @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category  Category?  @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  recipient Recipient? @relation(fields: [recipientId], references: [id], onDelete: SetNull)
+
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([userId, categoryId])
+  @@index([userId, recipientId])
+  @@map("transactions")
+}
+
+model Budget {
+  id          String   @id @default(uuid())
+  name        String
+  amount      Decimal  @db.Decimal(10, 2)
+  period      String   // "weekly", "monthly", "yearly"
+  startDate   DateTime @map("start_date")
+  endDate     DateTime @map("end_date")
+  userId      String   @map("user_id")
+  categoryId  String?  @map("category_id") // Budget per category
+  isActive    Boolean  @default(true) @map("is_active")
+  alertAt     Decimal? @db.Decimal(3, 2) @map("alert_at") // Alert at 80% = 0.80
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  // Relations
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  category Category? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  alerts   BudgetAlert[]
+
+  @@map("budgets")
+}
+
+model BudgetAlert {
+  id        String   @id @default(uuid())
+  budgetId  String   @map("budget_id")
+  type      String   // "warning", "exceeded", "approaching"
+  message   String
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  budget Budget @relation(fields: [budgetId], references: [id], onDelete: Cascade)
+
+  @@map("budget_alerts")
+}
+
+model AiInsight {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  type        String   // "spending_pattern", "budget_suggestion", "saving_tip", "behavioral_coaching"
+  title       String
+  description String
+  data        Json?    // Additional structured data
+  score       Int?     // Relevance score 0-100
+  isRead      Boolean  @default(false) @map("is_read")
+  validUntil  DateTime? @map("valid_until") // Insight expiration
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+  @@index([userId, isRead])
+  @@map("ai_insights")
+}
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  type      String   // "budget_alert", "ai_insight", "transaction_added", "system"
+  title     String
+  message   String
+  data      Json?    // Additional payload
+  isRead    Boolean  @default(false) @map("is_read")
+  channel   String   // "websocket", "email", "push"
+  createdAt DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model ApiToken {
+  id          String   @id @default(uuid())
+  userId      String   @map("user_id")
+  name        String   // Token name/description
+  token       String   @unique
+  scopes      String[] // ["read:summary", "write:transactions", etc.]
+  isActive    Boolean  @default(true) @map("is_active")
+  expiresAt   DateTime? @map("expires_at")
+  lastUsedAt  DateTime? @map("last_used_at")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("api_tokens")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid())
+  userId     String?  @map("user_id") // Nullable for system actions
+  action     String   // "CREATE", "UPDATE", "DELETE"
+  resource   String   // "transaction", "budget", "category", etc.
+  resourceId String   @map("resource_id")
+  oldData    Json?    @map("old_data")
+  newData    Json?    @map("new_data")
+  ipAddress  String?  @map("ip_address")
+  userAgent  String?  @map("user_agent")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  // Relations
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([resource, resourceId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+// For behavioral scoring and analytics
+model UserBehaviorScore {
+  id                String   @id @default(uuid())
+  userId            String   @unique @map("user_id")
+  overallScore      Int      @map("overall_score") // 0-100
+  budgetAdherence   Int      @map("budget_adherence") // 0-100
+  spendingConsistency Int    @map("spending_consistency") // 0-100
+  savingsRate       Decimal  @db.Decimal(5, 2) @map("savings_rate") // Percentage
+  lastCalculatedAt  DateTime @map("last_calculated_at")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  @@map("user_behavior_scores")
+}
+
+// For caching frequent analytics queries
+model AnalyticsCache {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  cacheKey  String   @map("cache_key") // "monthly_spending_2024_07", "top_recipients", etc.
+  data      Json
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@unique([userId, cacheKey])
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("analytics_cache")
+}

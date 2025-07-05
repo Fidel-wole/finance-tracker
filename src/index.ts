@@ -5,12 +5,17 @@ import express from "express";
 import helmet from "helmet";
 import { PORT } from "./configs/env";
 import logger from "./utils/logger";
+import PartnerService from "./services/partner";
 //import { corsConfig } from "./configs/cors";
 
 const app = express();
 
 app.set("trust proxy", 1);
 app.use(helmet());
+
+// Initialize partner service before setting up routes
+PartnerService.initialize();
+
 app.use(express.json());
 
 //app.use(corsConfig);
