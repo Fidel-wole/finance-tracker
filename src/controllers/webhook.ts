@@ -19,9 +19,14 @@ export default class WebhookController {
     const { partner } = req.params;
     const clientIP = req.ip || req.connection.remoteAddress;
 
+    console.log(`[Webhook Controller] Received ${req.method} request for partner: ${partner}`);
+    console.log(`[Webhook Controller] Headers:`, req.headers);
+    console.log(`[Webhook Controller] Raw body length:`, req.rawBody?.length || 0);
+
     try {
       // Validate partner parameter
       if (!partner) {
+        console.log(`[Webhook Controller] Missing partner parameter`);
         res.status(400).json({
           success: false,
           error: 'Partner parameter is required',
@@ -31,6 +36,7 @@ export default class WebhookController {
 
       // Check if raw body is available
       if (!req.rawBody) {
+        console.log(`[Webhook Controller] Raw body not available`);
         res.status(400).json({
           success: false,
           error: 'Raw body not available. Ensure raw body parser middleware is applied.',

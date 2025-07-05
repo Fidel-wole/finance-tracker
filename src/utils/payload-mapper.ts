@@ -26,9 +26,9 @@ export class PayloadMapper {
    */
   private static getMapper(partnerName: string): (payload: any) => NormalizedWebhookPayload {
     const mappers: { [key: string]: (payload: any) => NormalizedWebhookPayload } = {
-      opay: this.mapOpayPayload,
-      kuda: this.mapKudaPayload,
-      palmpay: this.mapPalmPayPayload,
+      opay: PayloadMapper.mapOpayPayload,
+      kuda: PayloadMapper.mapKudaPayload,
+      palmpay: PayloadMapper.mapPalmPayPayload,
     };
 
     const mapper = mappers[partnerName];
@@ -55,7 +55,7 @@ export class PayloadMapper {
     const transaction: WebhookTransaction = {
       amount: data.amount,
       currency: data.currency,
-      type: this.mapOpayTransactionType(data.type, data.status),
+      type: PayloadMapper.mapOpayTransactionType(data.type, data.status),
       tags: ['opay', payload.event, data.status].filter(Boolean),
       description: data.description || `Opay ${data.type} transaction`,
       timestamp: new Date(data.created_at),
@@ -80,7 +80,7 @@ export class PayloadMapper {
     const transaction: WebhookTransaction = {
       amount: parseFloat(transactionData.amount),
       currency: transactionData.currency,
-      type: this.mapKudaTransactionType(transactionData.transactionType),
+      type: PayloadMapper.mapKudaTransactionType(transactionData.transactionType),
       tags: ['kuda', payload.eventType, transactionData.transactionType].filter(Boolean),
       description: transactionData.narration || `Kuda ${transactionData.transactionType} transaction`,
       timestamp: new Date(transactionData.timestamp),
@@ -105,7 +105,7 @@ export class PayloadMapper {
     const webhookTransaction: WebhookTransaction = {
       amount: transaction.amount,
       currency: transaction.currency,
-      type: this.mapPalmPayTransactionType(transaction.transaction_type),
+      type: PayloadMapper.mapPalmPayTransactionType(transaction.transaction_type),
       tags: [...(transaction.tags || []), 'palmpay', payload.event_type].filter(Boolean),
       description: transaction.description || `PalmPay ${transaction.transaction_type} transaction`,
       timestamp: new Date(transaction.created_at),

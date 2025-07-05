@@ -9,63 +9,40 @@ declare global {
 }
 
 /**
- * Middleware to capture raw body for webhook signature verification
- * This must be applied before any body parsing middleware
+ * Simple middleware to capture raw body and parse JSON for webhooks
  */
-export const rawBodyParser = (req: Request, res: Response, next: NextFunction) => {
-  // Only capture raw body for POST requests (webhooks)
-  if (req.method !== 'POST') {
-    return next();
-  }
-
-  const chunks: Buffer[] = [];
+export const webhookBodyParser = (req: Request, res: Response, next: NextFunction) => {
+  console.log(`[Webhook Body Parser] Processing ${req.method} request to ${req.path}`);
   
-  req.on('data', (chunk: Buffer) => {
-    chunks.push(chunk);
+  let rawBody = '';
+  
+  req.setEncoding('utf8');
+  
+  req.on('data', (chunk: string) => {
+    rawBody += chunk;
   });
 
   req.on('end', () => {
-    req.rawBody = Buffer.concat(chunks);
+    // Store raw body as Buffer for signature verification
+    req.rawBody = Buffer.from(rawBody, 'utf8');
+    console.log(`[Webhook Body Parser] Captured ${req.rawBody.length} bytes`);
+    
+    // Parse JSON
+    if (rawBody.length > 0) {
+      try {
+        req.body = JSON.parse(rawBody);
+        console.log(`[Webhook Body Parser] Successfully parsed JSON`);
+      } catch (error) {
+        console.error('[Webhook Body Parser] JSON parsing error:', error);
+        return res.status(400).json({ error: 'Invalid JSON payload' });
+      }
+    }
+    
     next();
   });
 
   req.on('error', (error) => {
-    console.error('Error reading raw body:', error);
+    console.error('[Webhook Body Parser] Error reading body:', error);
     next(error);
   });
-};
-
-/**
- * Middleware factory for specific routes that need raw body
- * @param path - Path pattern to apply raw body parsing to
- */
-export const conditionalRawBodyParser = (path: string | RegExp) => {
-  return (req: Request, res: Response, next: NextFunction) => {
-    const shouldApplyRawParser = typeof path === 'string' 
-      ? req.path.includes(path)
-      : path.test(req.path);
-
-    if (shouldApplyRawParser) {
-      return rawBodyParser(req, res, next);
-    }
-    
-    next();
-  };
-};
-
-/**
- * Express middleware that parses JSON but preserves raw body
- */
-export const jsonWithRawBody = (req: Request, res: Response, next: NextFunction) => {
-  // Only parse JSON for POST requests with raw body
-  if (req.method === 'POST' && req.rawBody) {
-    try {
-      req.body = JSON.parse(req.rawBody.toString());
-    } catch (error) {
-      console.error('JSON parsing error:', error);
-      res.status(400).json({ error: 'Invalid JSON payload' });
-      return;
-    }
-  }
-  next();
 };

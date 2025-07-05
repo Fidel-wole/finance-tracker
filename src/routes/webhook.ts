@@ -1,13 +1,12 @@
 import { Router } from 'express';
 import WebhookController from '../controllers/webhook';
-import { rawBodyParser, jsonWithRawBody } from '../middleware/raw-body-parser';
+import { webhookBodyParser } from '../middleware/raw-body-parser';
 
 const webhookRoutes = Router();
 const webhookController = new WebhookController();
 
-// Apply raw body parser and JSON parser to all webhook routes
-webhookRoutes.use('/', rawBodyParser);
-webhookRoutes.use('/', jsonWithRawBody);
+// Apply webhook body parser to all webhook routes
+webhookRoutes.use(webhookBodyParser);
 
 // Main webhook endpoint for partner-specific webhooks
 webhookRoutes.post(
