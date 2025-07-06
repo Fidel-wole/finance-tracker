@@ -6,7 +6,7 @@ const prisma = new PrismaClient();
 export default class TransactionRepository {
   async createTransaction(params: { data: CreateTransactionInput }) {
     const { data } = params;
-    
+
     return prisma.transaction.create({
       data: {
         amount: data.amount,
@@ -16,7 +16,9 @@ export default class TransactionRepository {
         date: data.date,
         userId: data.userId,
         categoryId: data.categoryId,
-        recipientId: data.recipientId,
+        recipient: data.recipient
+          ? JSON.parse(JSON.stringify(data.recipient))
+          : undefined,
         tags: data.tags || [],
         isRecurring: data.isRecurring || false,
         recurringId: data.recurringId,
@@ -25,7 +27,6 @@ export default class TransactionRepository {
       include: {
         user: true,
         category: true,
-        recipient: true,
       },
     });
   }
@@ -38,10 +39,9 @@ export default class TransactionRepository {
       include: {
         user: true,
         category: true,
-        recipient: true,
       },
       orderBy: {
-        date: 'desc',
+        date: "desc",
       },
     });
   }
@@ -54,23 +54,31 @@ export default class TransactionRepository {
       include: {
         user: true,
         category: true,
-        recipient: true,
       },
     });
   }
 
-  async updateTransaction(id: string, params: { data: Partial<CreateTransactionInput> }) {
+  async updateTransaction(
+    id: string,
+    params: { data: Partial<CreateTransactionInput> }
+  ) {
     const { data } = params;
-    
+
+    // Remove userId from update data as it can't be updated directly
+    const { userId, categoryId, recipient, ...updateData } = data;
+
     return prisma.transaction.update({
       where: {
         id,
       },
-      data,
+      data: {
+        ...updateData,
+        ...(categoryId && { category: { connect: { id: categoryId } } }),
+        ...(recipient && { recipient: JSON.parse(JSON.stringify(recipient)) }),
+      },
       include: {
         user: true,
         category: true,
-        recipient: true,
       },
     });
   }

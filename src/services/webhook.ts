@@ -163,6 +163,7 @@ export default class WebhookService {
       date: webhookTransaction.timestamp,
       userId,
       tags: [...webhookTransaction.tags, partnerName],
+      recipient: webhookTransaction.recipient || null,
       // Add partner-specific metadata
       notes: JSON.stringify({
         partner: partnerName,
