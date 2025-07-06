@@ -59,6 +59,11 @@ export class PayloadMapper {
       tags: ['opay', payload.event, data.status].filter(Boolean),
       description: data.description || `Opay ${data.type} transaction`,
       timestamp: new Date(data.created_at),
+      recipient: data.recipient ? {
+        name: data.recipient.name,
+        account_number: data.recipient.account_number,
+        bank_code: data.recipient.bank_code,
+      } : null,
     };
 
     return { user, transaction };
@@ -84,6 +89,11 @@ export class PayloadMapper {
       tags: ['kuda', payload.eventType, transactionData.transactionType].filter(Boolean),
       description: transactionData.narration || `Kuda ${transactionData.transactionType} transaction`,
       timestamp: new Date(transactionData.timestamp),
+      recipient: transactionData.recipient ? {
+        name: transactionData.recipient.name,
+        account_number: transactionData.recipient.account_number,
+        bank_code: transactionData.recipient.bank_code,
+      } : null,
     };
 
     return { user, transaction };
@@ -109,6 +119,11 @@ export class PayloadMapper {
       tags: [...(transaction.tags || []), 'palmpay', payload.event_type].filter(Boolean),
       description: transaction.description || `PalmPay ${transaction.transaction_type} transaction`,
       timestamp: new Date(transaction.created_at),
+      recipient: transaction.recipient ? {
+        name: transaction.recipient.name,
+        account_number: transaction.recipient.account_number,
+        bank_code: transaction.recipient.bank_code,
+      } : null,
     };
 
     return { user, transaction: webhookTransaction };

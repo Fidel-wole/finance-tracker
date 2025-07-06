@@ -1,3 +1,5 @@
+import { Recipient } from "./transaction";
+
 export interface WebhookUser {
   externalId: string;
   name: string;
@@ -12,6 +14,7 @@ export interface WebhookTransaction {
   tags: string[];
   description?: string;
   timestamp: Date;
+  recipient?: Recipient | null; // Optional recipient information
 }
 
 export interface NormalizedWebhookPayload {
@@ -49,6 +52,7 @@ export interface OpayWebhookPayload {
     type: string;
     created_at: string;
     description?: string;
+    recipient?: Recipient | null;
   };
 }
 
@@ -65,6 +69,7 @@ export interface KudaWebhookPayload {
     timestamp: string;
     phoneNumber?: string;
     email?: string;
+    recipient?: Recipient | null;
   };
 }
 
@@ -84,5 +89,6 @@ export interface PalmPayWebhookPayload {
     description?: string;
     created_at: string;
     tags?: string[];
+    recipient?: Recipient | null;
   };
 }
