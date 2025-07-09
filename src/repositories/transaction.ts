@@ -1,4 +1,4 @@
-import { PrismaClient } from "../../generated/prisma";
+import { PrismaClient, Prisma } from "../../generated/prisma";
 import { CreateTransactionInput } from "../interfaces/transaction";
 
 const prisma = new PrismaClient();
@@ -31,10 +31,14 @@ export default class TransactionRepository {
     });
   }
 
-  async getTransactionsByUserId(userId: string) {
+  async getUsertransactions(userId: string, startDate?: Date, endDate?: Date) {
     return prisma.transaction.findMany({
       where: {
         userId,
+        createdAt: {
+          gte: startDate || new Date("1970-01-01"),
+          lte: endDate || new Date(),
+        },
       },
       include: {
         user: true,
@@ -64,7 +68,6 @@ export default class TransactionRepository {
   ) {
     const { data } = params;
 
-    // Remove userId from update data as it can't be updated directly
     const { userId, categoryId, recipient, ...updateData } = data;
 
     return prisma.transaction.update({
@@ -89,5 +92,99 @@ export default class TransactionRepository {
         id,
       },
     });
+  }
+
+
+  async getUserTransactionsWithFilters(
+    userId: string,
+    options?: {
+      type?: string;
+      limit?: number;
+      startDate?: Date;
+      endDate?: Date;
+    }
+  ) {
+    return prisma.transaction.findMany({
+      where: {
+        userId,
+        ...(options?.type && { type: options.type }),
+        ...(options?.startDate && options?.endDate && {
+          date: {
+            gte: options.startDate,
+            lte: options.endDate,
+          },
+        }),
+      },
+      include: {
+        user: true,
+        category: true,
+      },
+      orderBy: {
+        date: "desc",
+      },
+      ...(options?.limit && { take: options.limit }),
+    });
+  }
+
+  async getUserMonthlySummary(userId: string, year: number, month: number) {
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59);
+
+    return prisma.transaction.findMany({
+      where: {
+        userId,
+        date: {
+          gte: startDate,
+          lte: endDate,
+        },
+      },
+      include: {
+        category: true,
+      },
+    });
+  }
+
+  async getTopRecipients(userId: string, limit: number = 5) {
+    // Get all transactions with recipients for the user
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        userId,
+        recipient: {
+          not: Prisma.JsonNull
+        }
+      },
+      select: {
+        amount: true,
+        recipient: true,
+        type: true,
+      },
+    });
+
+    return transactions;
+  }
+
+  async getMonthlyRecipientsAnalysis(userId: string, year: number, month: number) {
+    const startDate = new Date(year, month - 1, 1);
+    const endDate = new Date(year, month, 0, 23, 59, 59);
+
+    const transactions = await prisma.transaction.findMany({
+      where: {
+        userId,
+        date: {
+          gte: startDate,
+          lte: endDate
+        },
+        recipient: {
+          not: Prisma.JsonNull
+        }
+      },
+      select: {
+        amount: true,
+        recipient: true,
+        type: true,
+      },
+    });
+
+    return transactions;
   }
 }
