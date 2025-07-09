@@ -9,4 +9,5 @@ export const {
   OPAY_WEBHOOK_SECRET,
   KUDA_WEBHOOK_SECRET,
   PALMPAY_WEBHOOK_SECRET,
+  OPENAI_API_KEY
 } = process.env;

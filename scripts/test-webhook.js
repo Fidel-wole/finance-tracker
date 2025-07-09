@@ -14,67 +14,72 @@ const SAMPLE_PAYLOADS = {
   opay: {
     event: "payment.success",
     data: {
-      reference: "ref_123456789",
-      amount: 1500.0,
+      reference: "ref_opay_003",
+      amount: 3500.0,
       currency: "NGN",
       customer: {
-        id: "cust_opay_001",
-        name: "John Doe",
-        email: "john.doe@example.com",
-        phone: "+2348012345678",
+        id: "cust_opay_003",
+        name: "Daniel James",
+        email: "daniel@example.com",
+        phone: "+2347012345678",
       },
       status: "successful",
-      type: "payment", // outbound
-      created_at: "2025-07-05T12:00:00Z",
-      description: "Payment for broadband services",
+      type: "payment",
+      created_at: "2025-07-05T14:30:00Z",
+      description: "Ride payment",
       recipient: {
-        name: "SwiftNet Broadband",
-        account_number: "1122334455",
-        bank_code: "058",
+        name: "Bolt NG",
+        account_number: "1234432112",
+        bank_code: "023",
         is_internal: false,
       },
     },
   },
 
   kuda: {
-    eventType: "transaction.debit", // outbound
+    eventType: "transaction.debit",
     transactionData: {
-      transactionId: "txn_kuda_456789",
-      amount: "2000.00",
+      transactionId: "txn_kuda_334455",
+      amount: "15000.00",
       currency: "NGN",
-      accountNumber: "1234567890", // user account
-      accountName: "Jane Smith", // user name
-      narration: "Transfer to Acme Corp",
+      accountNumber: "1234567890",
+      accountName: "Fola Akintunde",
+      narration: "Transfer to Michael Adebayo",
       transactionType: "debit",
-      timestamp: "2025-07-05T12:00:00Z",
-      phoneNumber: "+2348087654321",
-      email: "jane.smith@example.com",
+      timestamp: "2025-07-05T15:00:00Z",
+      phoneNumber: "+2348133344556",
+      email: "fola.akintunde@example.com",
       recipient: {
-        name: "Acme Corp",
-        account_number: "9988776655",
-        bank_code: "044",
+        name: "Michael Adebayo",
+        account_number: "7788990011",
+        bank_code: "057",
         is_internal: false,
       },
     },
   },
 
   palmpay: {
-    event_type: "payment_received", // INBOUND
+event_type: "payment_sent",
     transaction: {
-      id: "pp_palmpay_987654",
-      amount: 750.0,
+      id: "pp_palmpay_567890",
+      amount: 7000.0,
       currency: "NGN",
       user: {
-        user_id: "user_palmpay_321",
-        full_name: "Bob Johnson",
-        phone_number: "+2348098765432",
-        email_address: "bob.johnson@example.com",
+        user_id: "user_palmpay_456",
+        full_name: "Angela Umeh",
+        phone_number: "+2347019988776",
+        email_address: "angela.umeh@example.com",
       },
-      transaction_type: "payment_received", // income
-      description: "Airtime refund",
-      created_at: "2025-07-05T12:00:00Z",
-      tags: ["refund", "airtime", "reversal"],
-      // ✅ No recipient included here since money is coming in
+      transaction_type: "payment_sent",
+      description: "Electricity bill",
+      created_at: "2025-07-05T15:45:00Z",
+      tags: ["utilities", "electricity"],
+      recipient: {
+        name: "Ikeja Electric",
+        account_number: "9900112233",
+        bank_code: "063",
+        is_internal: false,
+      },
     },
   },
 };

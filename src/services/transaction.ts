@@ -14,8 +14,8 @@ export default class TransactionService {
     });
   }
 
-  async getTransactionsByUserId(userId: string) {
-    return this.transactionRepository.getTransactionsByUserId(userId);
+  async getUsertransactions(userId: string, startDate?: Date, endDate?: Date) {
+    return this.transactionRepository.getUsertransactions(userId, startDate, endDate);
   }
 
   async getTransactionById(id: string) {
