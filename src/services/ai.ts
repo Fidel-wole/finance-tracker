@@ -208,9 +208,9 @@ Respond with ONLY a JSON object in this format:
 The confidence should be between 0.0 and 1.0 based on how certain you are about the categorization.
 `;
 
-      // Add timeout to prevent hanging
+      // Add timeout to prevent hanging - very aggressive for large datasets
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 8000); // 8 second timeout
+        setTimeout(() => reject(new Error('OpenAI API timeout')), 3000); // 3 second timeout
       });
 
       const response = await Promise.race([
@@ -223,7 +223,7 @@ The confidence should be between 0.0 and 1.0 based on how certain you are about 
             },
             { role: "user", content: prompt }
           ],
-          max_tokens: 100,
+          max_tokens: 50, // Reduced for faster response
           temperature: 0.1,
         }),
         timeoutPromise
@@ -265,9 +265,9 @@ Respond with ONLY a JSON object in this format:
 The confidence should be between 0.0 and 1.0. If no clear merchant can be identified, use "Unknown" as the name with low confidence.
 `;
 
-      // Add timeout to prevent hanging
+      // Add timeout to prevent hanging - reduced for large datasets
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 8000); // 8 second timeout
+        setTimeout(() => reject(new Error('OpenAI API timeout')), 3000); // 3 second timeout
       });
 
       const response = await Promise.race([
@@ -280,7 +280,7 @@ The confidence should be between 0.0 and 1.0. If no clear merchant can be identi
             },
             { role: "user", content: prompt }
           ],
-          max_tokens: 100,
+          max_tokens: 50, // Reduced for faster response
           temperature: 0.1,
         }),
         timeoutPromise
@@ -343,9 +343,9 @@ Respond with a JSON array of strings:
 ["insight 1", "insight 2", "insight 3"]
 `;
 
-      // Add timeout to prevent hanging
+      // Add timeout to prevent hanging - increased for large datasets
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 10000); // 10 second timeout
+        setTimeout(() => reject(new Error('OpenAI API timeout')), 15000); // 15 second timeout for insights
       });
 
       const response = await Promise.race([

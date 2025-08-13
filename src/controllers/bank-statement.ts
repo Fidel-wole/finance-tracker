@@ -202,7 +202,6 @@ export class BankStatementController {
             statementPeriod: statement.statementPeriod,
             processingTime: statement.processingTime
           },
-          transactions,
           summary,
           analysis: statement.analysisResult
         }
@@ -299,7 +298,7 @@ export class BankStatementController {
    */
   private async processStatementAsync(statementId: string, filePath: string, fileType: string): Promise<void> {
     const startTime = Date.now();
-    const TIMEOUT_MS = 120000; // 2 minutes timeout
+    const TIMEOUT_MS = 300000; // 5 minutes timeout for large datasets
     
     try {
       console.log(`Starting processing for statement ${statementId}`);
@@ -313,7 +312,7 @@ export class BankStatementController {
       
       // Create a timeout promise
       const timeoutPromise = new Promise((_, reject) => {
-        setTimeout(() => reject(new Error('Processing timeout after 2 minutes')), TIMEOUT_MS);
+        setTimeout(() => reject(new Error('Processing timeout after 5 minutes')), TIMEOUT_MS);
       });
       
       // Race between processing and timeout

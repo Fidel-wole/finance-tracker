@@ -316,13 +316,18 @@ export default class BankStatementService {
       // Detect patterns
       const patterns = this.detectPatterns(transactions);
 
-      // Generate insights using AI with timeout
+      // Generate insights - skip AI for large datasets to save time
       let insights: string[];
-      try {
-        insights = await this.generateInsights(transactions, summary);
-      } catch (error) {
-        console.warn('AI insights failed, using fallback:', error);
+      if (transactions.length > 200) {
+        console.log(`Large dataset (${transactions.length} transactions): using fallback insights to avoid timeouts`);
         insights = this.generateFallbackInsights(summary);
+      } else {
+        try {
+          insights = await this.generateInsights(transactions, summary);
+        } catch (error) {
+          console.warn('AI insights failed, using fallback:', error);
+          insights = this.generateFallbackInsights(summary);
+        }
       }
 
       return {
@@ -386,33 +391,211 @@ export default class BankStatementService {
   }
 
   private async categorizeTransactions(transactions: ExtractedTransaction[]): Promise<(ExtractedTransaction & { category?: string; merchant?: string; confidence?: number })[]> {
-    const categorizedTransactions = [];
+    // For very large datasets (>100 transactions), use smart categorization
+    if (transactions.length > 100) {
+      return this.smartCategorizeTransactions(transactions);
+    }
 
-    for (const transaction of transactions) {
-      try {
-        // Use AI to categorize and extract merchant info
-        const category = await this.aiService.categorizeTransaction(transaction.description);
-        const merchant = await this.aiService.extractMerchant(transaction.description);
-        
-        categorizedTransactions.push({
-          ...transaction,
-          category: category?.category || 'Other',
-          merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
-          confidence: category?.confidence || 0.5
-        });
+    const categorizedTransactions: (ExtractedTransaction & { category?: string; merchant?: string; confidence?: number })[] = [];
+    const BATCH_SIZE = 10; // Process 10 transactions at a time
+    const MAX_RETRIES = 2;
 
-      } catch (error) {
-        // Fallback to basic categorization
-        categorizedTransactions.push({
-          ...transaction,
-          category: this.basicCategorization(transaction.description),
-          merchant: this.extractMerchantFromDescription(transaction.description),
-          confidence: 0.3
-        });
+    console.log(`Starting categorization of ${transactions.length} transactions in batches of ${BATCH_SIZE}`);
+
+    // Process transactions in batches to avoid overwhelming the AI service
+    for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
+      const batch = transactions.slice(i, i + BATCH_SIZE);
+      console.log(`Processing batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(transactions.length / BATCH_SIZE)} (${batch.length} transactions)`);
+
+      // Process each transaction in the batch with limited concurrency
+      const batchResults = await Promise.allSettled(
+        batch.map(async (transaction, index) => {
+          let retries = 0;
+          
+          while (retries <= MAX_RETRIES) {
+            try {
+              // Use AI to categorize and extract merchant info with timeout
+              const [category, merchant] = await Promise.all([
+                this.aiService.categorizeTransaction(transaction.description),
+                this.aiService.extractMerchant(transaction.description)
+              ]);
+              
+              return {
+                ...transaction,
+                category: category?.category || 'Other',
+                merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
+                confidence: category?.confidence || 0.5
+              };
+
+            } catch (error) {
+              retries++;
+              if (retries > MAX_RETRIES) {
+                console.warn(`AI categorization failed for transaction ${i + index + 1} after ${MAX_RETRIES} retries, using fallback`);
+                // Fallback to basic categorization
+                return {
+                  ...transaction,
+                  category: this.basicCategorization(transaction.description),
+                  merchant: this.extractMerchantFromDescription(transaction.description),
+                  confidence: 0.3
+                };
+              }
+              // Wait briefly before retry
+              await new Promise(resolve => setTimeout(resolve, 1000));
+            }
+          }
+        })
+      );
+
+      // Process batch results
+      batchResults.forEach((result, index) => {
+        if (result.status === 'fulfilled' && result.value) {
+          categorizedTransactions.push(result.value);
+        } else {
+          console.error(`Failed to process transaction ${i + index + 1}:`, result.status === 'rejected' ? result.reason : 'Unknown error');
+          // Add transaction with fallback categorization
+          const transaction = batch[index];
+          categorizedTransactions.push({
+            ...transaction,
+            category: this.basicCategorization(transaction.description),
+            merchant: this.extractMerchantFromDescription(transaction.description),
+            confidence: 0.3
+          });
+        }
+      });
+
+      // Add a small delay between batches to prevent API rate limiting
+      if (i + BATCH_SIZE < transactions.length) {
+        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay between batches
       }
     }
 
+    console.log(`Categorization complete: ${categorizedTransactions.length} transactions processed`);
     return categorizedTransactions;
+  }
+
+  /**
+   * Smart categorization for large datasets (>100 transactions)
+   * Uses AI for unique descriptions only, then applies patterns to similar transactions
+   */
+  private async smartCategorizeTransactions(transactions: ExtractedTransaction[]): Promise<(ExtractedTransaction & { category?: string; merchant?: string; confidence?: number })[]> {
+    console.log(`Using smart categorization for ${transactions.length} transactions`);
+    
+    // Group transactions by similar descriptions
+    const descriptionGroups = new Map<string, ExtractedTransaction[]>();
+    const uniqueDescriptions = new Set<string>();
+    
+    transactions.forEach(transaction => {
+      // Normalize description for grouping (remove amounts, dates, reference numbers)
+      const normalizedDesc = this.normalizeDescription(transaction.description);
+      
+      if (!descriptionGroups.has(normalizedDesc)) {
+        descriptionGroups.set(normalizedDesc, []);
+        uniqueDescriptions.add(transaction.description); // Keep one original for AI processing
+      }
+      descriptionGroups.get(normalizedDesc)!.push(transaction);
+    });
+
+    console.log(`Grouped ${transactions.length} transactions into ${descriptionGroups.size} unique patterns`);
+
+    // Process only unique descriptions with AI (much smaller set)
+    const aiCategorizationMap = new Map<string, { category: string; merchant: string; confidence: number }>();
+    const uniqueTransactions = Array.from(uniqueDescriptions).map(desc => 
+      transactions.find(t => t.description === desc)!
+    );
+
+    console.log(`Processing ${uniqueTransactions.length} unique transactions with AI`);
+
+    // Process unique transactions in smaller batches with circuit breaker
+    const BATCH_SIZE = 3; // Reduced batch size for faster processing
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 5; // Circuit breaker threshold
+    
+    for (let i = 0; i < uniqueTransactions.length; i += BATCH_SIZE) {
+      const batch = uniqueTransactions.slice(i, i + BATCH_SIZE);
+      
+      // Circuit breaker: skip AI if too many consecutive failures
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.log(`Circuit breaker activated. Using fallback categorization for remaining ${uniqueTransactions.length - i} transactions.`);
+        
+        // Apply fallback to remaining transactions
+        for (let j = i; j < uniqueTransactions.length; j++) {
+          const transaction = uniqueTransactions[j];
+          const normalizedDesc = this.normalizeDescription(transaction.description);
+          aiCategorizationMap.set(normalizedDesc, {
+            category: this.basicCategorization(transaction.description),
+            merchant: this.extractMerchantFromDescription(transaction.description),
+            confidence: 0.3
+          });
+        }
+        break;
+      }
+      
+      const batchResults = await Promise.allSettled(
+        batch.map(async (transaction) => {
+          try {
+            // Use faster timeout and simpler AI calls
+            const [category, merchant] = await Promise.all([
+              this.aiService.categorizeTransaction(transaction.description),
+              this.aiService.extractMerchant(transaction.description)
+            ]);
+            
+            const normalizedDesc = this.normalizeDescription(transaction.description);
+            aiCategorizationMap.set(normalizedDesc, {
+              category: category?.category || 'Other',
+              merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
+              confidence: category?.confidence || 0.5
+            });
+            
+            consecutiveFailures = 0; // Reset failure counter on success
+            
+          } catch (error) {
+            consecutiveFailures++;
+            console.warn(`AI failed for unique transaction (failure ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, error);
+            const normalizedDesc = this.normalizeDescription(transaction.description);
+            aiCategorizationMap.set(normalizedDesc, {
+              category: this.basicCategorization(transaction.description),
+              merchant: this.extractMerchantFromDescription(transaction.description),
+              confidence: 0.3
+            });
+          }
+        })
+      );
+
+      // Reduced delay between batches for faster processing
+      if (i + BATCH_SIZE < uniqueTransactions.length && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
+        await new Promise(resolve => setTimeout(resolve, 500)); // Reduced from 1000ms
+      }
+    }
+
+    // Apply categorization to all transactions based on patterns
+    const categorizedTransactions: (ExtractedTransaction & { category?: string; merchant?: string; confidence?: number })[] = [];
+    
+    transactions.forEach(transaction => {
+      const normalizedDesc = this.normalizeDescription(transaction.description);
+      const categorization = aiCategorizationMap.get(normalizedDesc);
+      
+      categorizedTransactions.push({
+        ...transaction,
+        category: categorization?.category || this.basicCategorization(transaction.description),
+        merchant: categorization?.merchant || this.extractMerchantFromDescription(transaction.description),
+        confidence: categorization?.confidence || 0.3
+      });
+    });
+
+    console.log(`Smart categorization complete: ${categorizedTransactions.length} transactions processed`);
+    return categorizedTransactions;
+  }
+
+  /**
+   * Normalize transaction description for grouping similar transactions
+   */
+  private normalizeDescription(description: string): string {
+    return description
+      .toLowerCase()
+      .replace(/\d+/g, '') // Remove numbers
+      .replace(/[^\w\s]/g, ' ') // Remove special characters
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim();
   }
 
   private async generateInsights(transactions: any[], summary: any): Promise<string[]> {
