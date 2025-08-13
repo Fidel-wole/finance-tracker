@@ -22,6 +22,7 @@
     "bcryptjs": "^3.0.2",
     "cors": "^2.8.5",
     "crypto": "^1.0.1",
+    "csv-parser": "^3.0.0",
     "date-fns": "^4.1.0",
     "decimal.js": "^10.5.0",
     "dotenv": "^17.0.1",
@@ -32,13 +33,18 @@
     "joi": "^17.13.3",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.16.1",
+    "multer": "^1.4.5-lts.1",
     "openai": "^5.8.3",
+    "pdf-parse": "^1.1.1",
     "redis": "^5.5.6",
     "socket.io": "^4.8.1",
-    "winston": "^3.17.0"
+    "winston": "^3.17.0",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
+    "@types/multer": "^1.4.7",
+    "@types/pdf-parse": "^1.1.1",
     "nodemon": "^3.1.10",
     "prisma": "^6.11.1",
     "ts-node": "^10.9.2"

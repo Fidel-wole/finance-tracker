@@ -6,7 +6,7 @@ import dispatcher from "../../utils/dispatcher";
 export default class MiscController {
   static home(req: Request, res: Response, next: NextFunction): void {
     try {
-      const message = "Welcome to Transzt Backend Service";
+      const message = "Welcome to Finance Tracker Backend Service";
       logger.info(routeConf.home, message);
       dispatcher.DispatchSuccessMessage(res, message);
     } catch (error) {
