@@ -1,6 +1,0 @@
-Transaction Date,Value Date,Narration,Debit,Credit,Balance,Reference
-2024-01-01,2024-01-01,Transfer from John Doe,,5000.00,25000.00,TRF001
-2024-01-02,2024-01-02,POS Payment - Shoprite,2500.00,,22500.00,POS001
-2024-01-03,2024-01-03,ATM Withdrawal,1000.00,,21500.00,ATM001
-2024-01-04,2024-01-04,Salary Credit,,50000.00,71500.00,SAL001
-2024-01-05,2024-01-05,Transfer to Jane Smith,10000.00,,61500.00,TRF002
