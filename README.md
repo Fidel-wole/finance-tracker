@@ -61,13 +61,14 @@ src/
 git clone <repository-url>
 cd finance-tracker
 
-# Install dependencies
+# Install backend dependencies
 npm install
+
 ```
 
 ### 2. Environment Setup
 
-Create a `.env` file in the root directory:
+Create a `.env` file in the root directory (backend):
 
 ```env
 # Server Configuration
@@ -84,7 +85,7 @@ OPENAI_API_KEY=your_openai_api_key
 OPAY_WEBHOOK_SECRET=your_opay_secret
 KUDA_WEBHOOK_SECRET=your_kuda_secret
 PALMPAY_WEBHOOK_SECRET=your_palmpay_secret
-```
+
 
 ### 3. Database Setup
 
@@ -102,14 +103,13 @@ npm run prisma:studio
 ### 4. Start the Application
 
 ```bash
-# Development mode with hot reload
+# Start the backend (from root directory)
 npm run dev
 
-# Production mode
-npm start
+
 ```
 
-The API will be available at `http://localhost:3000`
+The backend API will be available at `http://localhost:3000`
 
 ## 📚 API Documentation
 

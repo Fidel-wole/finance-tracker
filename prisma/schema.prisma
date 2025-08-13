@@ -33,6 +33,7 @@ model User {
   auditLogs       AuditLog[]
   aiInsights      AiInsight[]
   notifications   Notification[]
+  bankStatements  BankStatement[]
 
   @@map("users")
 }
@@ -225,4 +226,60 @@ model AnalyticsCache {
   @@index([userId])
   @@index([expiresAt])
   @@map("analytics_cache")
+}
+
+// Bank Statement Upload and Analysis
+model BankStatement {
+  id              String   @id @default(uuid())
+  userId          String?  @map("user_id") // Make optional for now
+  fileName        String   @map("file_name")
+  fileSize        Int      @map("file_size")
+  fileType        String   @map("file_type") // "pdf", "csv", "xlsx"
+  bankName        String?  @map("bank_name") // Auto-detected or user-provided
+  accountNumber   String?  @map("account_number")
+  statementPeriod Json?    @map("statement_period") // { startDate, endDate }
+  status          String   @default("processing") @map("status") // "processing", "completed", "failed"
+  filePath        String   @map("file_path") // Storage path
+  extractedData   Json?    @map("extracted_data") // Raw extracted transactions
+  analysisResult  Json?    @map("analysis_result") // AI analysis results
+  errorMessage    String?  @map("error_message")
+  processingTime  Int?     @map("processing_time") // in milliseconds
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  // Relations - make optional
+  user            User?             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions    StatementTransaction[]
+
+  @@index([userId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("bank_statements")
+}
+
+// Transactions extracted from bank statements
+model StatementTransaction {
+  id                String        @id @default(uuid())
+  statementId       String        @map("statement_id")
+  date              DateTime
+  description       String
+  amount            Decimal       @db.Decimal(10, 2)
+  type              String        // "debit", "credit"
+  balance           Decimal?      @db.Decimal(10, 2)
+  reference         String?
+  category          String?       // AI-detected category
+  merchant          String?       // AI-detected merchant
+  confidence        Float?        // AI confidence score 0-1
+  rawData           Json?         @map("raw_data") // Original row data
+  isReconciled      Boolean       @default(false) @map("is_reconciled") // Matched with existing transaction
+  reconciledWithId  String?       @map("reconciled_with_id") // Reference to Transaction.id
+  createdAt         DateTime      @default(now()) @map("created_at")
+
+  // Relations
+  statement         BankStatement @relation(fields: [statementId], references: [id], onDelete: Cascade)
+
+  @@index([statementId])
+  @@index([date])
+  @@index([category])
+  @@map("statement_transactions")
 }
