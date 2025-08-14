@@ -316,13 +316,15 @@ export default class BankStatementService {
       // Detect patterns
       const patterns = this.detectPatterns(transactions);
 
-      // Generate insights using AI with timeout
+      // Generate insights - always try AI first, with better timeout handling
       let insights: string[];
       try {
+        console.log(`Generating AI insights for ${transactions.length} transactions`);
         insights = await this.generateInsights(transactions, summary);
       } catch (error) {
-        console.warn('AI insights failed, using fallback:', error);
-        insights = this.generateFallbackInsights(summary);
+        console.error('AI insights failed:', error);
+        // Return empty insights array instead of fallback - force AI dependency
+        insights = ['Unable to generate insights at this time. Please try again later.'];
       }
 
       return {
@@ -343,7 +345,7 @@ export default class BankStatementService {
         categories: [],
         topMerchants: [],
         monthlyBreakdown: this.calculateMonthlyBreakdown(transactions),
-        insights: ['Analysis completed with basic statistics. AI insights temporarily unavailable.'],
+        insights: ['Unable to generate insights at this time. Please try again later.'],
         patterns: {
           recurringPayments: [],
           unusualTransactions: [],
@@ -392,10 +394,11 @@ export default class BankStatementService {
     }
 
     const categorizedTransactions: (ExtractedTransaction & { category?: string; merchant?: string; confidence?: number })[] = [];
-    const BATCH_SIZE = 10; // Process 10 transactions at a time
-    const MAX_RETRIES = 2;
+    const BATCH_SIZE = 5; // Reduced batch size for better control
+    const MAX_RETRIES = 1; // Reduced retries for faster failure
+    const MAX_AI_CALLS = Math.min(30, transactions.length); // Limit AI calls for medium datasets
 
-    console.log(`Starting categorization of ${transactions.length} transactions in batches of ${BATCH_SIZE}`);
+    console.log(`Starting categorization of ${transactions.length} transactions (max ${MAX_AI_CALLS} with AI) in batches of ${BATCH_SIZE}`);
 
     // Process transactions in batches to avoid overwhelming the AI service
     for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
@@ -405,38 +408,51 @@ export default class BankStatementService {
       // Process each transaction in the batch with limited concurrency
       const batchResults = await Promise.allSettled(
         batch.map(async (transaction, index) => {
-          let retries = 0;
+          const globalIndex = i + index;
           
-          while (retries <= MAX_RETRIES) {
-            try {
-              // Use AI to categorize and extract merchant info with timeout
-              const [category, merchant] = await Promise.all([
-                this.aiService.categorizeTransaction(transaction.description),
-                this.aiService.extractMerchant(transaction.description)
-              ]);
-              
-              return {
-                ...transaction,
-                category: category?.category || 'Other',
-                merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
-                confidence: category?.confidence || 0.5
-              };
-
-            } catch (error) {
-              retries++;
-              if (retries > MAX_RETRIES) {
-                console.warn(`AI categorization failed for transaction ${i + index + 1} after ${MAX_RETRIES} retries, using fallback`);
-                // Fallback to basic categorization
+          // Use AI only for the first MAX_AI_CALLS transactions
+          if (globalIndex < MAX_AI_CALLS) {
+            let retries = 0;
+            
+            while (retries <= MAX_RETRIES) {
+              try {
+                // Process category and merchant sequentially to reduce API load
+                const category = await this.aiService.categorizeTransaction(transaction.description);
+                await new Promise(resolve => setTimeout(resolve, 300)); // Brief pause between calls
+                
+                const merchant = await this.aiService.extractMerchant(transaction.description);
+                
                 return {
                   ...transaction,
-                  category: this.basicCategorization(transaction.description),
-                  merchant: this.extractMerchantFromDescription(transaction.description),
-                  confidence: 0.3
+                  category: category?.category || 'Other',
+                  merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
+                  confidence: category?.confidence || 0.5
                 };
+
+              } catch (error) {
+                retries++;
+                if (retries > MAX_RETRIES) {
+                  console.warn(`AI categorization failed for transaction ${globalIndex + 1} after ${MAX_RETRIES} retries, using fallback`);
+                  // Fallback to basic categorization
+                  return {
+                    ...transaction,
+                    category: this.basicCategorization(transaction.description),
+                    merchant: this.extractMerchantFromDescription(transaction.description),
+                    confidence: 0.3
+                  };
+                }
+                // Wait briefly before retry
+                await new Promise(resolve => setTimeout(resolve, 500));
               }
-              // Wait briefly before retry
-              await new Promise(resolve => setTimeout(resolve, 1000));
             }
+          } else {
+            // Use fallback categorization for remaining transactions
+            return {
+              ...transaction,
+              category: this.basicCategorization(transaction.description),
+              merchant: this.extractMerchantFromDescription(transaction.description),
+              confidence: 0.3
+            };
           }
         })
       );
@@ -458,13 +474,14 @@ export default class BankStatementService {
         }
       });
 
-      // Add a small delay between batches to prevent API rate limiting
+      // Add a delay between batches to prevent API rate limiting
       if (i + BATCH_SIZE < transactions.length) {
-        await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay between batches
+        await new Promise(resolve => setTimeout(resolve, 1000)); // 1 second delay between batches
       }
     }
 
-    console.log(`Categorization complete: ${categorizedTransactions.length} transactions processed`);
+    const aiProcessedCount = categorizedTransactions.filter(t => t.confidence && t.confidence > 0.4).length;
+    console.log(`Categorization complete: ${categorizedTransactions.length} transactions processed, ${aiProcessedCount} with AI, ${categorizedTransactions.length - aiProcessedCount} with fallback`);
     return categorizedTransactions;
   }
 
@@ -500,42 +517,96 @@ export default class BankStatementService {
 
     console.log(`Processing ${uniqueTransactions.length} unique transactions with AI`);
 
-    // Process unique transactions in smaller batches
-    const BATCH_SIZE = 5;
-    for (let i = 0; i < uniqueTransactions.length; i += BATCH_SIZE) {
+    // Enhanced processing with better timeout management
+    const BATCH_SIZE = 2; // Reduced to minimize API load
+    const MAX_AI_TRANSACTIONS = Math.min(50, uniqueTransactions.length); // Limit AI calls for very large datasets
+    let consecutiveFailures = 0;
+    const MAX_CONSECUTIVE_FAILURES = 3; // Stricter circuit breaker
+    const AI_PROCESSING_TIMEOUT = 60000; // 1 minute max for AI processing
+    const startTime = Date.now();
+    
+    console.log(`Will process max ${MAX_AI_TRANSACTIONS} unique transactions with AI, remaining will use fallback`);
+    
+    // Process limited number of unique transactions with AI
+    for (let i = 0; i < Math.min(MAX_AI_TRANSACTIONS, uniqueTransactions.length); i += BATCH_SIZE) {
+      // Check if we've exceeded AI processing timeout
+      if (Date.now() - startTime > AI_PROCESSING_TIMEOUT) {
+        console.log(`AI processing timeout reached. Using fallback for remaining ${uniqueTransactions.length - i} transactions.`);
+        break;
+      }
+      
       const batch = uniqueTransactions.slice(i, i + BATCH_SIZE);
       
-      const batchResults = await Promise.allSettled(
-        batch.map(async (transaction) => {
-          try {
-            const [category, merchant] = await Promise.all([
-              this.aiService.categorizeTransaction(transaction.description),
-              this.aiService.extractMerchant(transaction.description)
-            ]);
-            
-            const normalizedDesc = this.normalizeDescription(transaction.description);
-            aiCategorizationMap.set(normalizedDesc, {
-              category: category?.category || 'Other',
-              merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
-              confidence: category?.confidence || 0.5
-            });
-            
-          } catch (error) {
-            console.warn(`AI failed for unique transaction, using fallback:`, error);
-            const normalizedDesc = this.normalizeDescription(transaction.description);
-            aiCategorizationMap.set(normalizedDesc, {
-              category: this.basicCategorization(transaction.description),
-              merchant: this.extractMerchantFromDescription(transaction.description),
-              confidence: 0.3
-            });
+      // Circuit breaker: skip AI if too many consecutive failures
+      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
+        console.log(`Circuit breaker activated after ${consecutiveFailures} failures. Using fallback for remaining transactions.`);
+        break;
+      }
+      
+      // Process batch sequentially to avoid overwhelming the API
+      for (const transaction of batch) {
+        try {
+          const normalizedDesc = this.normalizeDescription(transaction.description);
+          
+          // Skip if already processed
+          if (aiCategorizationMap.has(normalizedDesc)) {
+            continue;
           }
-        })
-      );
+          
+          // Process category and merchant sequentially to reduce API load
+          const category = await this.aiService.categorizeTransaction(transaction.description);
+          await new Promise(resolve => setTimeout(resolve, 200)); // Brief pause between calls
+          
+          const merchant = await this.aiService.extractMerchant(transaction.description);
+          
+          aiCategorizationMap.set(normalizedDesc, {
+            category: category?.category || 'Other',
+            merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
+            confidence: category?.confidence || 0.5
+          });
+          
+          consecutiveFailures = 0; // Reset failure counter on success
+          console.log(`Successfully processed AI categorization ${i + 1}/${Math.min(MAX_AI_TRANSACTIONS, uniqueTransactions.length)}`);
+          
+        } catch (error) {
+          consecutiveFailures++;
+          console.warn(`AI failed for transaction (failure ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, error);
+          
+          const normalizedDesc = this.normalizeDescription(transaction.description);
+          aiCategorizationMap.set(normalizedDesc, {
+            category: this.basicCategorization(transaction.description),
+            merchant: this.extractMerchantFromDescription(transaction.description),
+            confidence: 0.3
+          });
+          
+          // Add longer delay after failures to avoid hammering the API
+          await new Promise(resolve => setTimeout(resolve, 1000));
+        }
+      }
 
-      // Small delay between batches
-      if (i + BATCH_SIZE < uniqueTransactions.length) {
+      // Moderate delay between batches
+      if (i + BATCH_SIZE < Math.min(MAX_AI_TRANSACTIONS, uniqueTransactions.length) && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
+    }
+
+    // Apply fallback categorization to any remaining unique transactions not processed by AI
+    const processedCount = aiCategorizationMap.size;
+    const remainingTransactions = uniqueTransactions.slice(processedCount);
+    
+    if (remainingTransactions.length > 0) {
+      console.log(`Applying fallback categorization to ${remainingTransactions.length} remaining unique transactions`);
+      
+      remainingTransactions.forEach(transaction => {
+        const normalizedDesc = this.normalizeDescription(transaction.description);
+        if (!aiCategorizationMap.has(normalizedDesc)) {
+          aiCategorizationMap.set(normalizedDesc, {
+            category: this.basicCategorization(transaction.description),
+            merchant: this.extractMerchantFromDescription(transaction.description),
+            confidence: 0.3
+          });
+        }
+      });
     }
 
     // Apply categorization to all transactions based on patterns
@@ -553,7 +624,8 @@ export default class BankStatementService {
       });
     });
 
-    console.log(`Smart categorization complete: ${categorizedTransactions.length} transactions processed`);
+    const aiProcessedCount = Array.from(aiCategorizationMap.values()).filter(c => c.confidence > 0.4).length;
+    console.log(`Smart categorization complete: ${categorizedTransactions.length} transactions processed, ${aiProcessedCount} with AI, ${aiCategorizationMap.size - aiProcessedCount} with fallback`);
     return categorizedTransactions;
   }
 
@@ -570,24 +642,8 @@ export default class BankStatementService {
   }
 
   private async generateInsights(transactions: any[], summary: any): Promise<string[]> {
-    try {
-      return await this.aiService.generateStatementInsights(transactions, summary);
-    } catch (error) {
-      // Fallback insights
-      const insights = [];
-      
-      if (summary.netCashFlow > 0) {
-        insights.push(`Positive cash flow of ₦${summary.netCashFlow.toLocaleString()} during this period.`);
-      } else {
-        insights.push(`Negative cash flow of ₦${Math.abs(summary.netCashFlow).toLocaleString()} during this period.`);
-      }
-      
-      if (summary.totalExpenses > summary.totalIncome * 0.8) {
-        insights.push('Your expenses are quite high relative to your income. Consider reviewing your spending habits.');
-      }
-      
-      return insights;
-    }
+    // Always use AI service - no fallback logic
+    return await this.aiService.generateStatementInsights(transactions, summary);
   }
 
   private calculateCategoriesBreakdown(transactions: any[]) {
@@ -615,26 +671,6 @@ export default class BankStatementService {
       }))
       .sort((a, b) => b.amount - a.amount)
       .slice(0, 10); // Top 10 categories
-  }
-
-  private generateFallbackInsights(summary: any): string[] {
-    const insights = [];
-    
-    if (summary.netCashFlow > 0) {
-      insights.push(`Positive cash flow of ₦${summary.netCashFlow.toLocaleString()} during this period.`);
-    } else {
-      insights.push(`Negative cash flow of ₦${Math.abs(summary.netCashFlow).toLocaleString()} during this period.`);
-    }
-    
-    if (summary.totalExpenses > summary.totalIncome * 0.8) {
-      insights.push('Your expenses are quite high relative to your income. Consider reviewing your spending habits.');
-    }
-
-    if (summary.averageTransactionAmount > 50000) {
-      insights.push('You tend to make large transactions. Consider budgeting for better financial control.');
-    }
-    
-    return insights;
   }
 
   private findTopMerchants(transactions: any[]) {

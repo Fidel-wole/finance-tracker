@@ -208,9 +208,9 @@ Respond with ONLY a JSON object in this format:
 The confidence should be between 0.0 and 1.0 based on how certain you are about the categorization.
 `;
 
-      // Add timeout to prevent hanging
+      // Add timeout to prevent hanging - reduced timeout for faster failure
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 8000); // 8 second timeout
+        setTimeout(() => reject(new Error('OpenAI API timeout')), 5000); // Reduced to 5 seconds
       });
 
       const response = await Promise.race([
@@ -223,8 +223,10 @@ The confidence should be between 0.0 and 1.0 based on how certain you are about 
             },
             { role: "user", content: prompt }
           ],
-          max_tokens: 100,
-          temperature: 0.1,
+          max_tokens: 50, // Reduced for faster response
+          temperature: 0, // More deterministic
+        }, {
+          timeout: 4000, // OpenAI client timeout in options
         }),
         timeoutPromise
       ]) as OpenAI.Chat.Completions.ChatCompletion;
@@ -265,9 +267,9 @@ Respond with ONLY a JSON object in this format:
 The confidence should be between 0.0 and 1.0. If no clear merchant can be identified, use "Unknown" as the name with low confidence.
 `;
 
-      // Add timeout to prevent hanging
+      // Add timeout to prevent hanging - reduced timeout for faster failure
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 8000); // 8 second timeout
+        setTimeout(() => reject(new Error('OpenAI API timeout')), 5000); // Reduced to 5 seconds
       });
 
       const response = await Promise.race([
@@ -280,8 +282,10 @@ The confidence should be between 0.0 and 1.0. If no clear merchant can be identi
             },
             { role: "user", content: prompt }
           ],
-          max_tokens: 100,
-          temperature: 0.1,
+          max_tokens: 50, // Reduced for faster response
+          temperature: 0, // More deterministic
+        }, {
+          timeout: 4000, // OpenAI client timeout in options
         }),
         timeoutPromise
       ]) as OpenAI.Chat.Completions.ChatCompletion;
@@ -305,7 +309,7 @@ The confidence should be between 0.0 and 1.0. If no clear merchant can be identi
 
   async generateStatementInsights(transactions: any[], summary: any): Promise<string[]> {
     if (!this.openai) {
-      return this.fallbackStatementInsights(transactions, summary);
+      throw new Error('OpenAI API key not configured - cannot generate insights');
     }
 
     try {
@@ -321,31 +325,34 @@ The confidence should be between 0.0 and 1.0. If no clear merchant can be identi
       }));
 
       const prompt = `
-Analyze this bank statement data and provide 3-5 personalized financial insights:
+Analyze this bank statement data and provide 3-5 unique, personalized financial insights. Make each insight specific and actionable.
 
-Summary:
+Financial Summary:
 - Total transactions: ${totalTransactions}
 - Total income: ₦${summary.totalIncome?.toLocaleString()}
 - Total expenses: ₦${summary.totalExpenses?.toLocaleString()}
 - Net cash flow: ₦${summary.netCashFlow?.toLocaleString()}
 - Average transaction: ₦${avgTransactionAmount?.toLocaleString()}
 
-Sample transactions:
+Sample recent transactions:
 ${JSON.stringify(sampleTransactions, null, 2)}
 
-Provide insights about:
-- Spending patterns
-- Areas for improvement
-- Positive financial behaviors
-- Budget recommendations
+Generate insights that are:
+1. Specific to this user's spending patterns
+2. Actionable and helpful
+3. Varied in focus (spending habits, savings opportunities, budgeting tips, etc.)
+4. Written in a conversational, helpful tone
+5. Include specific amounts where relevant
 
-Respond with a JSON array of strings:
-["insight 1", "insight 2", "insight 3"]
+Avoid generic statements. Each insight should feel personal and relevant.
+
+Respond with ONLY a JSON array of strings:
+["insight 1", "insight 2", "insight 3", "insight 4"]
 `;
 
-      // Add timeout to prevent hanging - increased for large datasets
+      // Add timeout to prevent hanging - increased timeout for quality insights
       const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 15000); // 15 second timeout for insights
+        setTimeout(() => reject(new Error('OpenAI API timeout')), 20000); // 20 second timeout for insights
       });
 
       const response = await Promise.race([
@@ -354,12 +361,14 @@ Respond with a JSON array of strings:
           messages: [
             {
               role: "system",
-              content: "You are a financial advisor providing personalized insights based on bank statement analysis. Always respond with valid JSON array of strings."
+              content: "You are a professional financial advisor with expertise in personal finance analysis. Provide specific, actionable insights based on transaction data. Always respond with valid JSON array of strings only."
             },
             { role: "user", content: prompt }
           ],
-          max_tokens: 500,
-          temperature: 0.3,
+          max_tokens: 800, // Increased for more detailed insights
+          temperature: 0.7, // More creative for varied insights
+        }, {
+          timeout: 18000, // OpenAI client timeout slightly less than our timeout
         }),
         timeoutPromise
       ]) as OpenAI.Chat.Completions.ChatCompletion;
@@ -370,11 +379,11 @@ Respond with a JSON array of strings:
         return Array.isArray(insights) ? insights : [content];
       }
 
-      return this.fallbackStatementInsights(transactions, summary);
+      throw new Error('AI service did not return valid insights');
 
     } catch (error) {
       console.error("Error generating statement insights:", error);
-      return this.fallbackStatementInsights(transactions, summary);
+      throw error; // Re-throw the error instead of using fallback
     }
   }
 
@@ -415,31 +424,5 @@ Respond with a JSON array of strings:
       name: merchantName || 'Unknown',
       confidence: merchantName ? 0.5 : 0.1
     };
-  }
-
-  private fallbackStatementInsights(transactions: any[], summary: any): string[] {
-    const insights = [];
-
-    if (summary.netCashFlow > 0) {
-      insights.push(`Great job! You had a positive cash flow of ₦${summary.netCashFlow?.toLocaleString()} during this period.`);
-    } else {
-      insights.push(`Your expenses exceeded income by ₦${Math.abs(summary.netCashFlow)?.toLocaleString()}. Consider reviewing your spending.`);
-    }
-
-    if (summary.totalExpenses > summary.totalIncome * 0.8) {
-      insights.push('Your expenses are quite high relative to your income. Consider looking for areas to reduce spending.');
-    }
-
-    if (transactions.length > 100) {
-      insights.push('You have a high number of transactions. Consider consolidating purchases to better track spending.');
-    }
-
-    const expenseTransactions = transactions.filter(t => t.type === 'debit');
-    if (expenseTransactions.length > 0) {
-      const avgExpense = expenseTransactions.reduce((sum, t) => sum + t.amount, 0) / expenseTransactions.length;
-      insights.push(`Your average expense transaction is ₦${avgExpense?.toLocaleString()}. Consider setting limits for daily spending.`);
-    }
-
-    return insights.slice(0, 5); // Return up to 5 insights
   }
 }
