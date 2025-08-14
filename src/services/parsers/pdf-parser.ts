@@ -55,25 +55,50 @@ export class PDFParser {
 
   private static detectBankType(text: string): string {
     const bankIndicators = {
+      // OPay should be checked first and with more specific patterns
+      opay: ['OPay', 'OWealth Balance', 'Blue Ridge Microfinance', 'Wallet Account & Savings Account'],
       gtbank: ['Guaranty Trust Bank', 'GTBank', 'gtb'],
       access: ['Access Bank', 'Diamond Bank'],
       firstbank: ['First Bank', 'FirstBank'],
       zenith: ['Zenith Bank'],
-      uba: ['United Bank for Africa', 'UBA'],
+      uba: ['United Bank for Africa', 'UBA Bank', ' UBA '], // More specific UBA patterns
       fidelity: ['Fidelity Bank'],
       wema: ['Wema Bank'],
-      union: ['Union Bank'],
-      opay: ['OPay', 'Wallet Account', 'OWealth Balance', 'Blue Ridge Microfinance']
+      union: ['Union Bank']
     };
 
     const lowerText = text.toLowerCase();
     
-    for (const [bank, indicators] of Object.entries(bankIndicators)) {
-      if (indicators.some(indicator => lowerText.includes(indicator.toLowerCase()))) {
-        return bank;
+    console.log('=== BANK DETECTION DEBUG ===');
+    console.log('Text sample for detection:', text.substring(0, 1000));
+    
+    // Check OPay patterns first with higher priority
+    console.log('Checking OPay patterns...');
+    for (const indicator of bankIndicators.opay) {
+      const found = lowerText.includes(indicator.toLowerCase());
+      console.log(`  "${indicator}": ${found}`);
+      if (found) {
+        console.log('Detected bank: opay');
+        return 'opay';
       }
     }
     
+    // Then check other banks
+    for (const [bank, indicators] of Object.entries(bankIndicators)) {
+      if (bank === 'opay') continue; // Already checked above
+      
+      console.log(`Checking ${bank} patterns...`);
+      for (const indicator of indicators) {
+        const found = lowerText.includes(indicator.toLowerCase());
+        console.log(`  "${indicator}": ${found}`);
+        if (found) {
+          console.log(`Detected bank: ${bank}`);
+          return bank;
+        }
+      }
+    }
+    
+    console.log('No bank patterns matched, using generic parser');
     return 'generic';
   }
 
@@ -537,34 +562,156 @@ export class PDFParser {
     console.log('=== OPAY PDF PARSING ===');
     console.log('Total lines:', lines.length);
     console.log('Sample lines:');
-    lines.slice(0, 10).forEach((line, i) => {
+    lines.slice(0, 25).forEach((line, i) => {
       console.log(`Line ${i + 1}: "${line}"`);
     });
     
-    let inTransactionSection = false;
-    let i = 0;
+    // Look for the transaction table header specific to OPay format
+    let transactionSectionStart = -1;
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i].toLowerCase();
+      // Look for the exact header pattern: "Trans. Time Value Date Description Debit/Credit Balance(₦) Channel Transaction Reference"
+      if ((line.includes('trans') && line.includes('time') && line.includes('value') && line.includes('date')) ||
+          (line.includes('transaction') && line.includes('reference')) ||
+          (line.includes('debit') && line.includes('credit') && line.includes('balance'))) {
+        transactionSectionStart = i;
+        console.log(`Found transaction table header at line ${i + 1}: "${lines[i]}"`);
+        break;
+      }
+    }
     
-    while (i < lines.length) {
+    if (transactionSectionStart === -1) {
+      console.log('No transaction table header found, scanning all lines for transactions...');
+      transactionSectionStart = 0;
+    }
+    
+    // Process lines after the header, looking for OPay transaction format
+    for (let i = transactionSectionStart + 1; i < lines.length; i++) {
       const line = lines[i];
       
-      // Look for transaction start patterns
-      // OPay transactions often have date patterns like "2025 Jul 14" or "14 Jul 2025"
-      const datePattern1 = /^(\d{4}\s+\w{3}\s+\d{1,2})\s+(\d{2}:\d{2}:\d{2})?/; // 2025 Jul 14
-      const datePattern2 = /^(\d{1,2}\s+\w{3}\s+\d{4})/; // 14 Jul 2025
+      // Skip empty lines and summary sections
+      if (!line || line.length < 20 || 
+          line.toLowerCase().includes('summary') ||
+          line.toLowerCase().includes('total') ||
+          line.toLowerCase().includes('opening') ||
+          line.toLowerCase().includes('closing') ||
+          line.toLowerCase().includes('note:')) {
+        continue;
+      }
       
-      if (datePattern1.test(line) || datePattern2.test(line)) {
-        console.log(`Found potential transaction at line ${i + 1}: "${line}"`);
-        // Found a potential transaction line
-        const transactionData = this.parseOPayTransactionBlock(lines, i);
-        if (transactionData.transaction) {
-          console.log('Successfully parsed transaction:', transactionData.transaction);
-          transactions.push(transactionData.transaction);
-        } else {
-          console.log('Failed to parse transaction block starting at line', i + 1);
+      // OPay transaction line format (actual format from logs):
+      // "2025 Aug 13 18:21:5013 Aug 2025Mobile Data-500.001,025.79E-Channel250813110100427972073969"
+      // Format: TransTime + ValueDate + Description + Amount + Balance + Channel + Reference (NO SPACES!)
+      
+      // Pattern for OPay concatenated format - we need to carefully extract each field
+      // TransTime: "2025 Aug 13 18:21:50" (19 chars)
+      // ValueDate: "13 Aug 2025" (11 chars) 
+      // Then Description, Amount, Balance, Channel, Reference
+      const opayPattern = /(\d{4}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})(\d{1,2}\s+\w{3}\s+\d{4})(.+?)([+\-][\d,]+\.?\d*)([\d,]+\.?\d*)([A-Za-z\-]+)([\d]+)$/;
+      
+      // More flexible pattern for variations
+      const opayFlexiblePattern = /(\d{4}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})(\d{1,2}\s+\w{3}\s+\d{4})(.+?)([+\-][\d,]+\.?\d*)([\d,]+\.?\d*)(.+?)$/;
+      
+      let match = line.match(opayPattern) || line.match(opayFlexiblePattern);
+      
+      if (match) {
+        console.log(`Found OPay transaction at line ${i + 1}: "${line}"`);
+        console.log('Match groups:', match);
+        
+        try {
+          const transTime = match[1]; // e.g., "2025 Aug 13 18:21:50"
+          const valueDate = match[2]; // e.g., "13 Aug 2025"
+          let description = match[3]?.trim(); // e.g., "Mobile Data"
+          const amountStr = match[4]; // e.g., "-500.00"
+          const balanceStr = match[5]; // e.g., "1,025.79"
+          
+          // For the main pattern, extract channel and reference separately
+          let channel = 'E-Channel';
+          let reference = '';
+          
+          if (match.length >= 8) {
+            // Full pattern matched
+            channel = match[6] || 'E-Channel';
+            reference = match[7] || '';
+          } else if (match.length >= 7) {
+            // Flexible pattern - last part contains channel + reference
+            const remaining = match[6] || '';
+            // Try to extract channel and reference from remaining text
+            const channelMatch = remaining.match(/^([A-Za-z\-]+)/);
+            if (channelMatch) {
+              channel = channelMatch[1];
+              reference = remaining.substring(channelMatch[1].length);
+            }
+          }
+          
+          // Clean up description - remove any trailing numbers or channel info that got mixed in
+          if (description) {
+            // Remove trailing numbers, E-Channel, etc.
+            description = description.replace(/E-Channel.*$/, '').replace(/\d{10,}.*$/, '').trim();
+            
+            // If description is too short, try to extract more meaningful text
+            if (description.length < 3) {
+              // Look for common transaction types
+              if (line.toLowerCase().includes('mobile data')) description = 'Mobile Data';
+              else if (line.toLowerCase().includes('transfer')) description = 'Transfer';
+              else if (line.toLowerCase().includes('payment')) description = 'Payment';
+              else if (line.toLowerCase().includes('airtime')) description = 'Airtime';
+              else description = 'OPay Transaction';
+            }
+          } else {
+            description = 'OPay Transaction';
+          }
+          
+          // Parse the value date (more reliable than trans time)
+          const date = this.parseOPayDate(valueDate);
+          if (!date) {
+            console.log('Failed to parse date:', valueDate);
+            continue;
+          }
+          
+          if (!description || description.length < 2) {
+            console.log('Invalid description after cleaning:', description);
+            continue;
+          }
+          
+          // Parse amount and determine type
+          const isCredit = amountStr.startsWith('+');
+          const amount = this.parseAmount(amountStr.replace(/[+\-]/g, ''));
+          const balance = this.parseAmount(balanceStr);
+          
+          if (amount > 0) {
+            const transaction = {
+              date,
+              description,
+              amount,
+              type: isCredit ? 'credit' : 'debit' as 'debit' | 'credit',
+              balance,
+              reference: reference || undefined,
+              rawData: { 
+                line, 
+                bank: 'opay',
+                transTime,
+                valueDate,
+                amountStr,
+                balanceStr,
+                channel
+              }
+            };
+            
+            transactions.push(transaction);
+            console.log('Added OPay transaction:', transaction);
+          } else {
+            console.log('Invalid amount:', amountStr);
+          }
+          
+        } catch (error) {
+          console.error('Error parsing OPay transaction line:', line, error);
         }
-        i = transactionData.nextIndex;
       } else {
-        i++;
+        // Check if line contains date pattern - might be a transaction we're missing
+        if (/\d{4}\s+\w{3}\s+\d{1,2}/.test(line) || /\d{1,2}\s+\w{3}\s+\d{4}/.test(line)) {
+          console.log(`Line with date pattern but no match at line ${i + 1}: "${line}"`);
+        }
       }
     }
     
@@ -608,40 +755,67 @@ export class PDFParser {
       const fullText = lines.join(' ');
       console.log('Extracting from text:', fullText);
       
-      // Look for date patterns
+      // Look for date patterns - OPay supports multiple formats
       const datePattern1 = /(\d{4}\s+\w{3}\s+\d{1,2})/; // 2025 Jul 14
       const datePattern2 = /(\d{1,2}\s+\w{3}\s+\d{4})/; // 14 Jul 2025
+      const datePattern3 = /(\d{1,2}\/\d{1,2}\/\d{4})/; // 14/07/2025
+      const datePattern4 = /(\d{4}-\d{2}-\d{2})/; // 2025-07-14
       
       let dateStr = '';
+      let dateFormat = '';
+      
       const dateMatch1 = fullText.match(datePattern1);
       const dateMatch2 = fullText.match(datePattern2);
+      const dateMatch3 = fullText.match(datePattern3);
+      const dateMatch4 = fullText.match(datePattern4);
       
       if (dateMatch1) {
         dateStr = dateMatch1[1];
+        dateFormat = 'yyyy MMM d';
         console.log('Found date pattern 1:', dateStr);
       } else if (dateMatch2) {
         dateStr = dateMatch2[1];
+        dateFormat = 'd MMM yyyy';
         console.log('Found date pattern 2:', dateStr);
+      } else if (dateMatch3) {
+        dateStr = dateMatch3[1];
+        dateFormat = 'd/M/yyyy';
+        console.log('Found date pattern 3:', dateStr);
+      } else if (dateMatch4) {
+        dateStr = dateMatch4[1];
+        dateFormat = 'yyyy-MM-dd';
+        console.log('Found date pattern 4:', dateStr);
       } else {
         console.log('No date pattern found');
         return null;
       }
       
       // Parse the date
-      const date = this.parseOPayDate(dateStr);
+      const date = this.parseOPayDate(dateStr, dateFormat);
       if (!date) {
         console.log('Failed to parse date:', dateStr);
         return null;
       }
       
-      // Look for amount patterns - OPay uses ₦ symbol and + for credit, - for debit
-      // Also handle format without currency symbol: +76,695.00 or -76,695.00
-      const amountPattern1 = /([+\-])₦([\d,]+\.?\d*)/; // With currency symbol
-      const amountPattern2 = /([+\-])([\d,]+\.?\d*)/; // Without currency symbol
+      // Look for amount patterns - OPay uses various formats
+      const amountPatterns = [
+        /([+\-])₦([\d,]+\.?\d*)/,        // +₦76,695.00
+        /₦([+\-])([\d,]+\.?\d*)/,        // ₦+76,695.00
+        /([+\-])([\d,]+\.?\d*)/,         // +76,695.00
+        /(₦[\d,]+\.?\d*)\s*(DR|CR)/i,    // ₦76,695.00 DR
+        /([\d,]+\.?\d*)\s*(DR|CR)/i      // 76,695.00 DR
+      ];
       
-      let amountMatch = fullText.match(amountPattern1);
-      if (!amountMatch) {
-        amountMatch = fullText.match(amountPattern2);
+      let amountMatch = null;
+      let amountPattern = null;
+      
+      for (const pattern of amountPatterns) {
+        amountMatch = fullText.match(pattern);
+        if (amountMatch) {
+          amountPattern = pattern;
+          console.log('Found amount with pattern:', pattern.toString(), 'Match:', amountMatch);
+          break;
+        }
       }
       
       if (!amountMatch) {
@@ -649,24 +823,43 @@ export class PDFParser {
         return null;
       }
       
-      const sign = amountMatch[1];
-      const amountStr = amountMatch[2];
-      const amount = this.parseAmount(amountStr);
-      const type = sign === '+' ? 'credit' : 'debit';
+      let amount = 0;
+      let type: 'debit' | 'credit' = 'debit';
       
-      console.log('Extracted amount:', { sign, amountStr, amount, type });
+      // Parse amount based on which pattern matched
+      if (amountPattern === amountPatterns[0] || amountPattern === amountPatterns[1] || amountPattern === amountPatterns[2]) {
+        // Pattern with +/- sign
+        const sign = amountMatch[1] === '+' ? '+' : '-';
+        const amountStr = amountMatch[2] || amountMatch[1];
+        amount = this.parseAmount(amountStr);
+        type = sign === '+' ? 'credit' : 'debit';
+      } else {
+        // Pattern with DR/CR
+        const amountStr = amountMatch[1];
+        const drCr = amountMatch[2].toUpperCase();
+        amount = this.parseAmount(amountStr);
+        type = drCr === 'CR' ? 'credit' : 'debit';
+      }
+      
+      console.log('Extracted amount:', { amount, type });
       
       // Extract description - everything between date and amount
       let description = fullText;
       
-      // Remove date part
-      description = description.replace(datePattern1, '').replace(datePattern2, '');
+      // Remove date parts
+      description = description.replace(datePattern1, '').replace(datePattern2, '')
+        .replace(datePattern3, '').replace(datePattern4, '');
       
-      // Remove amount part
-      description = description.replace(amountPattern1, '').replace(amountPattern2, '');
+      // Remove amount parts
+      for (const pattern of amountPatterns) {
+        description = description.replace(pattern, '');
+      }
       
       // Remove time patterns
       description = description.replace(/\d{2}:\d{2}:\d{2}/, '');
+      
+      // Remove common OPay keywords
+      description = description.replace(/\b(transaction|transfer|payment|wallet|opay)\b/gi, '');
       
       // Clean up description
       description = description.trim().replace(/\s+/g, ' ');
@@ -679,10 +872,12 @@ export class PDFParser {
         date,
         description,
         amount,
-        type: type as 'debit' | 'credit',
+        type,
         rawData: {
           originalLines: lines,
-          fullText: fullText
+          fullText: fullText,
+          dateFormat,
+          amountPattern: amountPattern?.toString()
         }
       };
       
@@ -692,8 +887,26 @@ export class PDFParser {
     }
   }
 
-  private static parseOPayDate(dateStr: string): Date | null {
+  private static parseOPayDate(dateStr: string, format?: string): Date | null {
     try {
+      // Handle different date formats based on the format parameter
+      if (format === 'd/M/yyyy') {
+        // Handle "14/07/2025" format
+        const parts = dateStr.split('/');
+        if (parts.length === 3) {
+          const day = parseInt(parts[0]);
+          const month = parseInt(parts[1]) - 1; // JavaScript months are 0-indexed
+          const year = parseInt(parts[2]);
+          return new Date(year, month, day);
+        }
+      }
+      
+      if (format === 'yyyy-MM-dd') {
+        // Handle "2025-07-14" format
+        const date = new Date(dateStr);
+        return isValid(date) ? date : null;
+      }
+      
       // Handle "2025 Jul 14" format
       const pattern1 = /(\d{4})\s+(\w{3})\s+(\d{1,2})/;
       const match1 = dateStr.match(pattern1);
