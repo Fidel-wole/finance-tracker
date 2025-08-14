@@ -316,18 +316,13 @@ export default class BankStatementService {
       // Detect patterns
       const patterns = this.detectPatterns(transactions);
 
-      // Generate insights - skip AI for large datasets to save time
+      // Generate insights using AI with timeout
       let insights: string[];
-      if (transactions.length > 200) {
-        console.log(`Large dataset (${transactions.length} transactions): using fallback insights to avoid timeouts`);
+      try {
+        insights = await this.generateInsights(transactions, summary);
+      } catch (error) {
+        console.warn('AI insights failed, using fallback:', error);
         insights = this.generateFallbackInsights(summary);
-      } else {
-        try {
-          insights = await this.generateInsights(transactions, summary);
-        } catch (error) {
-          console.warn('AI insights failed, using fallback:', error);
-          insights = this.generateFallbackInsights(summary);
-        }
       }
 
       return {
@@ -505,35 +500,14 @@ export default class BankStatementService {
 
     console.log(`Processing ${uniqueTransactions.length} unique transactions with AI`);
 
-    // Process unique transactions in smaller batches with circuit breaker
-    const BATCH_SIZE = 3; // Reduced batch size for faster processing
-    let consecutiveFailures = 0;
-    const MAX_CONSECUTIVE_FAILURES = 5; // Circuit breaker threshold
-    
+    // Process unique transactions in smaller batches
+    const BATCH_SIZE = 5;
     for (let i = 0; i < uniqueTransactions.length; i += BATCH_SIZE) {
       const batch = uniqueTransactions.slice(i, i + BATCH_SIZE);
-      
-      // Circuit breaker: skip AI if too many consecutive failures
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        console.log(`Circuit breaker activated. Using fallback categorization for remaining ${uniqueTransactions.length - i} transactions.`);
-        
-        // Apply fallback to remaining transactions
-        for (let j = i; j < uniqueTransactions.length; j++) {
-          const transaction = uniqueTransactions[j];
-          const normalizedDesc = this.normalizeDescription(transaction.description);
-          aiCategorizationMap.set(normalizedDesc, {
-            category: this.basicCategorization(transaction.description),
-            merchant: this.extractMerchantFromDescription(transaction.description),
-            confidence: 0.3
-          });
-        }
-        break;
-      }
       
       const batchResults = await Promise.allSettled(
         batch.map(async (transaction) => {
           try {
-            // Use faster timeout and simpler AI calls
             const [category, merchant] = await Promise.all([
               this.aiService.categorizeTransaction(transaction.description),
               this.aiService.extractMerchant(transaction.description)
@@ -546,11 +520,8 @@ export default class BankStatementService {
               confidence: category?.confidence || 0.5
             });
             
-            consecutiveFailures = 0; // Reset failure counter on success
-            
           } catch (error) {
-            consecutiveFailures++;
-            console.warn(`AI failed for unique transaction (failure ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, error);
+            console.warn(`AI failed for unique transaction, using fallback:`, error);
             const normalizedDesc = this.normalizeDescription(transaction.description);
             aiCategorizationMap.set(normalizedDesc, {
               category: this.basicCategorization(transaction.description),
@@ -561,9 +532,9 @@ export default class BankStatementService {
         })
       );
 
-      // Reduced delay between batches for faster processing
-      if (i + BATCH_SIZE < uniqueTransactions.length && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // Reduced from 1000ms
+      // Small delay between batches
+      if (i + BATCH_SIZE < uniqueTransactions.length) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
