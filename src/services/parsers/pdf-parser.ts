@@ -56,7 +56,7 @@ export class PDFParser {
   private static detectBankType(text: string): string {
     const bankIndicators = {
       // OPay should be checked first and with more specific patterns
-      opay: ['OPay', 'OWealth Balance', 'Blue Ridge Microfinance', 'Wallet Account & Savings Account'],
+      opay: ['OPay', 'OWealth Balance', 'Blue Ridge Microfinance', 'Wallet Account', 'Wallet Account & Savings Account'],
       gtbank: ['Guaranty Trust Bank', 'GTBank', 'gtb'],
       access: ['Access Bank', 'Diamond Bank'],
       firstbank: ['First Bank', 'FirstBank'],
