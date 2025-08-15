@@ -3,6 +3,13 @@ import { RecipientAnalysis } from "../interfaces/ai-suggestions";
 import { OPENAI_API_KEY } from "../configs/env";
 export default class AIService {
   private openai: OpenAI | null = null;
+  
+  // Intelligent caching for instant responses on similar transactions
+  private categoryCache = new Map<string, { category: string; confidence: number; timestamp: number }>();
+  private merchantCache = new Map<string, { name: string; confidence: number; timestamp: number }>();
+  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+  private cacheHits = { category: 0, merchant: 0 };
+  private totalRequests = { category: 0, merchant: 0 };
 
   constructor() {
     try {
@@ -179,8 +186,24 @@ Respond with a JSON array of suggestion strings:
   }
 
   async categorizeTransaction(description: string): Promise<{ category: string; confidence: number } | null> {
+    this.totalRequests.category++;
+    
+    // Check cache first for instant response
+    const cacheKey = this.normalizeForCache(description);
+    const cached = this.categoryCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      this.cacheHits.category++;
+      return { category: cached.category, confidence: cached.confidence };
+    }
+
     if (!this.openai) {
-      return this.fallbackCategorization(description);
+      const fallback = this.fallbackCategorization(description);
+      this.categoryCache.set(cacheKey, { 
+        category: fallback.category, 
+        confidence: fallback.confidence, 
+        timestamp: Date.now() 
+      });
+      return fallback;
     }
 
     try {
@@ -208,49 +231,79 @@ Respond with ONLY a JSON object in this format:
 The confidence should be between 0.0 and 1.0 based on how certain you are about the categorization.
 `;
 
-      // Add timeout to prevent hanging - reduced timeout for faster failure
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 5000); // Reduced to 5 seconds
+      // Optimized for speed - very short timeout, aggressive settings
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: "You are a financial transaction categorization expert. Always respond with valid JSON only."
+          },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 30, // Very limited for speed
+        temperature: 0, // Most deterministic
+      }, {
+        timeout: 2000, // 2 second timeout - very aggressive
       });
-
-      const response = await Promise.race([
-        this.openai.chat.completions.create({
-          model: "gpt-3.5-turbo",
-          messages: [
-            {
-              role: "system",
-              content: "You are a financial transaction categorization expert. Always respond with valid JSON only."
-            },
-            { role: "user", content: prompt }
-          ],
-          max_tokens: 50, // Reduced for faster response
-          temperature: 0, // More deterministic
-        }, {
-          timeout: 4000, // OpenAI client timeout in options
-        }),
-        timeoutPromise
-      ]) as OpenAI.Chat.Completions.ChatCompletion;
 
       const content = response.choices[0]?.message?.content?.trim();
       if (content) {
         const result = JSON.parse(content);
-        return {
+        const output = {
           category: result.category,
           confidence: result.confidence
         };
+        
+        // Cache the result
+        this.categoryCache.set(cacheKey, { 
+          category: output.category, 
+          confidence: output.confidence, 
+          timestamp: Date.now() 
+        });
+        
+        return output;
       }
 
-      return this.fallbackCategorization(description);
+      const fallback = this.fallbackCategorization(description);
+      this.categoryCache.set(cacheKey, { 
+        category: fallback.category, 
+        confidence: fallback.confidence, 
+        timestamp: Date.now() 
+      });
+      return fallback;
 
     } catch (error) {
-      console.error("Error categorizing transaction:", error);
-      return this.fallbackCategorization(description);
+      // Fast fallback - no logging to avoid slowdown
+      const fallback = this.fallbackCategorization(description);
+      this.categoryCache.set(cacheKey, { 
+        category: fallback.category, 
+        confidence: fallback.confidence, 
+        timestamp: Date.now() 
+      });
+      return fallback;
     }
   }
 
   async extractMerchant(description: string): Promise<{ name: string; confidence: number } | null> {
+    this.totalRequests.merchant++;
+    
+    // Check cache first for instant response
+    const cacheKey = this.normalizeForCache(description);
+    const cached = this.merchantCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      this.cacheHits.merchant++;
+      return { name: cached.name, confidence: cached.confidence };
+    }
+
     if (!this.openai) {
-      return this.fallbackMerchantExtraction(description);
+      const fallback = this.fallbackMerchantExtraction(description);
+      this.merchantCache.set(cacheKey, { 
+        name: fallback.name, 
+        confidence: fallback.confidence, 
+        timestamp: Date.now() 
+      });
+      return fallback;
     }
 
     try {
@@ -267,43 +320,57 @@ Respond with ONLY a JSON object in this format:
 The confidence should be between 0.0 and 1.0. If no clear merchant can be identified, use "Unknown" as the name with low confidence.
 `;
 
-      // Add timeout to prevent hanging - reduced timeout for faster failure
-      const timeoutPromise = new Promise<never>((_, reject) => {
-        setTimeout(() => reject(new Error('OpenAI API timeout')), 5000); // Reduced to 5 seconds
+      // Optimized for speed
+      const response = await this.openai.chat.completions.create({
+        model: "gpt-3.5-turbo",
+        messages: [
+          {
+            role: "system",
+            content: "You are a financial transaction analysis expert. Extract merchant names accurately. Always respond with valid JSON only."
+          },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 30, // Very limited for speed
+        temperature: 0, // Most deterministic
+      }, {
+        timeout: 2000, // 2 second timeout
       });
-
-      const response = await Promise.race([
-        this.openai.chat.completions.create({
-          model: "gpt-3.5-turbo",
-          messages: [
-            {
-              role: "system",
-              content: "You are a financial transaction analysis expert. Extract merchant names accurately. Always respond with valid JSON only."
-            },
-            { role: "user", content: prompt }
-          ],
-          max_tokens: 50, // Reduced for faster response
-          temperature: 0, // More deterministic
-        }, {
-          timeout: 4000, // OpenAI client timeout in options
-        }),
-        timeoutPromise
-      ]) as OpenAI.Chat.Completions.ChatCompletion;
 
       const content = response.choices[0]?.message?.content?.trim();
       if (content) {
         const result = JSON.parse(content);
-        return {
+        const output = {
           name: result.name,
           confidence: result.confidence
         };
+        
+        // Cache the result
+        this.merchantCache.set(cacheKey, { 
+          name: output.name, 
+          confidence: output.confidence, 
+          timestamp: Date.now() 
+        });
+        
+        return output;
       }
 
-      return this.fallbackMerchantExtraction(description);
+      const fallback = this.fallbackMerchantExtraction(description);
+      this.merchantCache.set(cacheKey, { 
+        name: fallback.name, 
+        confidence: fallback.confidence, 
+        timestamp: Date.now() 
+      });
+      return fallback;
 
     } catch (error) {
-      console.error("Error extracting merchant:", error);
-      return this.fallbackMerchantExtraction(description);
+      // Fast fallback - no logging to avoid slowdown
+      const fallback = this.fallbackMerchantExtraction(description);
+      this.merchantCache.set(cacheKey, { 
+        name: fallback.name, 
+        confidence: fallback.confidence, 
+        timestamp: Date.now() 
+      });
+      return fallback;
     }
   }
 
@@ -599,5 +666,63 @@ Respond with ONLY a JSON array of 5 strings:
       name: merchantName || 'Unknown',
       confidence: merchantName ? 0.5 : 0.1
     };
+  }
+
+  // Cache optimization methods
+  private normalizeForCache(description: string): string {
+    return description
+      .toLowerCase()
+      .replace(/\d+/g, '') // Remove numbers
+      .replace(/[^\w\s]/g, ' ') // Remove special characters
+      .replace(/\s+/g, ' ') // Normalize whitespace
+      .trim();
+  }
+
+  getCacheStats(): { 
+    categoryCache: { size: number; hitRate: number }; 
+    merchantCache: { size: number; hitRate: number };
+    totalSaved: number;
+  } {
+    const categoryHitRate = this.totalRequests.category > 0 ? 
+      (this.cacheHits.category / this.totalRequests.category) * 100 : 0;
+    const merchantHitRate = this.totalRequests.merchant > 0 ? 
+      (this.cacheHits.merchant / this.totalRequests.merchant) * 100 : 0;
+    
+    return {
+      categoryCache: { 
+        size: this.categoryCache.size, 
+        hitRate: Math.round(categoryHitRate * 10) / 10 
+      },
+      merchantCache: { 
+        size: this.merchantCache.size, 
+        hitRate: Math.round(merchantHitRate * 10) / 10 
+      },
+      totalSaved: this.cacheHits.category + this.cacheHits.merchant
+    };
+  }
+
+  clearExpiredCache(): void {
+    const now = Date.now();
+    let cleaned = 0;
+    
+    // Clear expired category cache entries
+    for (const [key, value] of this.categoryCache.entries()) {
+      if (now - value.timestamp > this.CACHE_TTL) {
+        this.categoryCache.delete(key);
+        cleaned++;
+      }
+    }
+    
+    // Clear expired merchant cache entries
+    for (const [key, value] of this.merchantCache.entries()) {
+      if (now - value.timestamp > this.CACHE_TTL) {
+        this.merchantCache.delete(key);
+        cleaned++;
+      }
+    }
+    
+    if (cleaned > 0) {
+      console.log(`Cache cleanup: removed ${cleaned} expired entries. Category: ${this.categoryCache.size}, Merchant: ${this.merchantCache.size}`);
+    }
   }
 }

@@ -517,80 +517,73 @@ export default class BankStatementService {
 
     console.log(`Processing ${uniqueTransactions.length} unique transactions with AI`);
 
-    // Enhanced processing with better timeout management
-    const BATCH_SIZE = 2; // Reduced to minimize API load
-    let consecutiveFailures = 0;
-    const MAX_CONSECUTIVE_FAILURES = 3; // Stricter circuit breaker
-    const AI_PROCESSING_TIMEOUT = 180000; // 3 minutes max for AI processing (increased for all transactions)
+    // ULTRA-FAST PARALLEL PROCESSING - No timeouts, maximum speed
+    const CONCURRENT_LIMIT = 15; // Process 15 transactions simultaneously
     const startTime = Date.now();
     
-    console.log(`Processing all ${uniqueTransactions.length} unique transactions with AI (no fallback)`);
+    console.log(`🚀 FAST MODE: Processing all ${uniqueTransactions.length} unique transactions with AI (PARALLEL)`);
     
-    // Process ALL unique transactions with AI
-    for (let i = 0; i < uniqueTransactions.length; i += BATCH_SIZE) {
-      // Check if we've exceeded AI processing timeout
-      if (Date.now() - startTime > AI_PROCESSING_TIMEOUT) {
-        console.log(`AI processing timeout reached. Using fallback for remaining ${uniqueTransactions.length - i} transactions.`);
-        break;
+    // Clean expired cache entries before processing
+    this.aiService.clearExpiredCache();
+    
+    // Helper function to process a single transaction with retry logic
+    const processTransactionFast = async (transaction: ExtractedTransaction): Promise<void> => {
+      const normalizedDesc = this.normalizeDescription(transaction.description);
+      
+      // Skip if already processed
+      if (aiCategorizationMap.has(normalizedDesc)) {
+        return;
       }
       
-      const batch = uniqueTransactions.slice(i, i + BATCH_SIZE);
-      
-      // Circuit breaker: skip AI if too many consecutive failures
-      if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES) {
-        console.log(`Circuit breaker activated after ${consecutiveFailures} failures. Using fallback for remaining transactions.`);
-        break;
+      try {
+        // Process category and merchant in parallel for maximum speed
+        const [categoryResult, merchantResult] = await Promise.all([
+          this.aiService.categorizeTransaction(transaction.description),
+          this.aiService.extractMerchant(transaction.description)
+        ]);
+        
+        aiCategorizationMap.set(normalizedDesc, {
+          category: categoryResult?.category || 'Other',
+          merchant: merchantResult?.name || this.extractMerchantFromDescription(transaction.description),
+          confidence: categoryResult?.confidence || 0.5
+        });
+        
+      } catch (error) {
+        // Use fallback immediately on any error - no retries for speed
+        aiCategorizationMap.set(normalizedDesc, {
+          category: this.basicCategorization(transaction.description),
+          merchant: this.extractMerchantFromDescription(transaction.description),
+          confidence: 0.3
+        });
       }
-      
-      // Process batch sequentially to avoid overwhelming the API
-      for (const transaction of batch) {
-        try {
-          const normalizedDesc = this.normalizeDescription(transaction.description);
-          
-          // Skip if already processed
-          if (aiCategorizationMap.has(normalizedDesc)) {
-            continue;
-          }
-          
-          // Process category and merchant sequentially to reduce API load
-          const category = await this.aiService.categorizeTransaction(transaction.description);
-          await new Promise(resolve => setTimeout(resolve, 200)); // Brief pause between calls
-          
-          const merchant = await this.aiService.extractMerchant(transaction.description);
-          
-          aiCategorizationMap.set(normalizedDesc, {
-            category: category?.category || 'Other',
-            merchant: merchant?.name || this.extractMerchantFromDescription(transaction.description),
-            confidence: category?.confidence || 0.5
-          });
-          
-          consecutiveFailures = 0; // Reset failure counter on success
-          console.log(`Successfully processed AI categorization ${i + 1}/${uniqueTransactions.length}`);
-          
-        } catch (error) {
-          consecutiveFailures++;
-          console.warn(`AI failed for transaction (failure ${consecutiveFailures}/${MAX_CONSECUTIVE_FAILURES}):`, error);
-          
-          const normalizedDesc = this.normalizeDescription(transaction.description);
-          aiCategorizationMap.set(normalizedDesc, {
-            category: this.basicCategorization(transaction.description),
-            merchant: this.extractMerchantFromDescription(transaction.description),
-            confidence: 0.3
-          });
-          
-          // Add longer delay after failures to avoid hammering the API
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      }
-
-      // Moderate delay between batches
-      if (i + BATCH_SIZE < uniqueTransactions.length && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      }
+    };
+    
+    // Process all transactions with controlled concurrency for maximum speed
+    let processed = 0;
+    const total = uniqueTransactions.length;
+    
+    // Split into chunks and process with controlled concurrency
+    const chunks = [];
+    for (let i = 0; i < uniqueTransactions.length; i += CONCURRENT_LIMIT) {
+      chunks.push(uniqueTransactions.slice(i, i + CONCURRENT_LIMIT));
     }
-
-    // All transactions are now processed with AI (no fallback needed)
-    console.log(`AI processing complete. Processed ${aiCategorizationMap.size} unique transaction patterns.`);
+    
+    for (const chunk of chunks) {
+      // Process entire chunk in parallel
+      await Promise.allSettled(
+        chunk.map(transaction => processTransactionFast(transaction))
+      );
+      
+      processed += chunk.length;
+      console.log(`⚡ Fast processing: ${Math.min(processed, total)}/${total} (${Math.round((processed/total)*100)}%)`);
+    }
+    
+    const processingTime = ((Date.now() - startTime) / 1000).toFixed(1);
+    console.log(`🎯 AI processing complete in ${processingTime}s! Processed ${aiCategorizationMap.size} unique patterns.`);
+    
+    // Log cache performance
+    const cacheStats = this.aiService.getCacheStats();
+    console.log(`📊 Cache performance - Category: ${cacheStats.categoryCache.hitRate}% hit rate (${cacheStats.categoryCache.size} entries), Merchant: ${cacheStats.merchantCache.hitRate}% hit rate (${cacheStats.merchantCache.size} entries), Total API calls saved: ${cacheStats.totalSaved}`);
 
     // Apply categorization to all transactions based on patterns
     const categorizedTransactions: (ExtractedTransaction & { category?: string; merchant?: string; confidence?: number })[] = [];
