@@ -599,49 +599,101 @@ export class PDFParser {
         continue;
       }
       
-      // OPay transaction line format (actual format from logs):
-      // "2025 Aug 13 18:21:5013 Aug 2025Mobile Data-500.001,025.79E-Channel250813110100427972073969"
-      // Format: TransTime + ValueDate + Description + Amount + Balance + Channel + Reference (NO SPACES!)
+      // OPay has TWO different transaction line formats:
+      // FORMAT 1: With timestamp: "2025 Aug 13 18:21:5013 Aug 2025Mobile Data-500.001,025.79E-Channel250813110100427972073969"
+      // FORMAT 2: Date only: "15 Jul 2025Transfer from FEMI JULIUS JULIUS OLAREWAJU+10,000.0010,003.90E-Channel100033250715120945788881998086"
       
-      // Pattern for OPay concatenated format - we need to carefully extract each field
-      // TransTime: "2025 Aug 13 18:21:50" (19 chars)
-      // ValueDate: "13 Aug 2025" (11 chars) 
-      // Then Description, Amount, Balance, Channel, Reference
-      const opayPattern = /(\d{4}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})(\d{1,2}\s+\w{3}\s+\d{4})(.+?)([+\-][\d,]+\.?\d*)([\d,]+\.?\d*)([A-Za-z\-]+)([\d]+)$/;
+      // Pattern 1: Full timestamp format (less common) - more flexible
+      const timestampPattern = /(\d{4}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})(\d{1,2}\s+\w{3}\s+\d{4})(.+?)([+\-][\d,]+\.?\d*)(.+?)([A-Za-z\-]+)([\d]*)$/;
       
-      // More flexible pattern for variations
-      const opayFlexiblePattern = /(\d{4}\s+\w{3}\s+\d{1,2}\s+\d{2}:\d{2}:\d{2})(\d{1,2}\s+\w{3}\s+\d{4})(.+?)([+\-][\d,]+\.?\d*)([\d,]+\.?\d*)(.+?)$/;
+      // Pattern 2: Date only format (most common) - more flexible
+      const dateOnlyPattern = /(\d{1,2}\s+\w{3}\s+\d{4})(.+?)([+\-][\d,]+\.?\d*)(.+?)([A-Za-z\-]+)?([\d]*)$/;
       
-      let match = line.match(opayPattern) || line.match(opayFlexiblePattern);
+      // Pattern 3: Very flexible - just date, description, and amount (fallback)
+      const flexiblePattern = /(\d{1,2}\s+\w{3}\s+\d{4})(.+?)([+\-][\d,]+\.?\d*)/;
+      
+      // Try all patterns
+      let match = line.match(timestampPattern);
+      let hasTimestamp = true;
+      
+      if (!match) {
+        match = line.match(dateOnlyPattern);
+        hasTimestamp = false;
+      }
+      
+      if (!match) {
+        match = line.match(flexiblePattern);
+        hasTimestamp = false;
+      }
       
       if (match) {
         console.log(`Found OPay transaction at line ${i + 1}: "${line}"`);
         console.log('Match groups:', match);
+        console.log('Pattern used:', hasTimestamp ? 'Timestamp format' : 'Date only format');
         
         try {
-          const transTime = match[1]; // e.g., "2025 Aug 13 18:21:50"
-          const valueDate = match[2]; // e.g., "13 Aug 2025"
-          let description = match[3]?.trim(); // e.g., "Mobile Data"
-          const amountStr = match[4]; // e.g., "-500.00"
-          const balanceStr = match[5]; // e.g., "1,025.79"
-          
-          // For the main pattern, extract channel and reference separately
-          let channel = 'E-Channel';
+          let transTime = '';
+          let valueDate = '';
+          let description = '';
+          let amountStr = '';
+          let balanceStr = '';
+          let channel = '';
           let reference = '';
           
-          if (match.length >= 8) {
-            // Full pattern matched
+          if (hasTimestamp && match.length >= 8) {
+            // FORMAT 1: Has timestamp
+            transTime = match[1]; // e.g., "2025 Aug 13 18:21:50"
+            valueDate = match[2]; // e.g., "13 Aug 2025"
+            description = match[3]?.trim(); // e.g., "Mobile Data"
+            amountStr = match[4]; // e.g., "-500.00"
+            
+            // Extract balance, channel, reference from the remaining part
+            const remainingPart = match[5] || '';
+            const balanceMatch = remainingPart.match(/([\d,]+\.?\d*)/);
+            balanceStr = balanceMatch ? balanceMatch[1] : '';
+            
             channel = match[6] || 'E-Channel';
             reference = match[7] || '';
-          } else if (match.length >= 7) {
-            // Flexible pattern - last part contains channel + reference
-            const remaining = match[6] || '';
-            // Try to extract channel and reference from remaining text
-            const channelMatch = remaining.match(/^([A-Za-z\-]+)/);
-            if (channelMatch) {
-              channel = channelMatch[1];
-              reference = remaining.substring(channelMatch[1].length);
+          } else if (!hasTimestamp && match.length >= 4) {
+            // FORMAT 2: Date only or flexible pattern
+            valueDate = match[1]; // e.g., "15 Jul 2025"
+            
+            // For the flexible pattern, we need to extract description and amount more carefully
+            const fullDescription = match[2]?.trim() || ''; // e.g., "Transfer from FEMI JULIUS..."
+            amountStr = match[3]; // e.g., "+10,000.00"
+            
+            // Try to extract balance from the remaining text after the amount
+            const restOfLine = line.substring(line.indexOf(amountStr) + amountStr.length);
+            const balanceMatch = restOfLine.match(/([\d,]+\.?\d*)/);
+            balanceStr = balanceMatch ? balanceMatch[1] : '';
+            
+            // Extract channel and reference
+            const channelMatch = restOfLine.match(/([A-Za-z\-]+)/);
+            channel = channelMatch ? channelMatch[1] : 'E-Channel';
+            
+            const refMatch = restOfLine.match(/([\d]{10,})/);
+            reference = refMatch ? refMatch[1] : '';
+            
+            // Clean description - remove any number sequences that might be mixed in
+            description = fullDescription.replace(/[\d,]+\.?\d*E-Channel[\d]*$/g, '').trim();
+            
+            // If description is still empty or too short, extract from the line
+            if (!description || description.length < 3) {
+              // Look for transaction type keywords
+              if (line.toLowerCase().includes('mobile data')) description = 'Mobile Data';
+              else if (line.toLowerCase().includes('airtime')) description = 'Airtime';
+              else if (line.toLowerCase().includes('transfer from')) description = 'Transfer (Credit)';
+              else if (line.toLowerCase().includes('transfer to')) description = 'Transfer (Debit)';
+              else if (line.toLowerCase().includes('payment')) description = 'Payment';
+              else if (line.toLowerCase().includes('levy')) description = 'Electronic Money Transfer Levy';
+              else description = 'OPay Transaction';
             }
+            
+            transTime = ''; // No timestamp available
+          } else {
+            // Skip if we can't parse the basic structure
+            console.log('Insufficient match groups:', match);
+            continue;
           }
           
           // Clean up description - remove any trailing numbers or channel info that got mixed in
@@ -649,13 +701,29 @@ export class PDFParser {
             // Remove trailing numbers, E-Channel, etc.
             description = description.replace(/E-Channel.*$/, '').replace(/\d{10,}.*$/, '').trim();
             
-            // If description is too short, try to extract more meaningful text
+            // Remove amount patterns that might have leaked into description
+            description = description.replace(/[+\-][\d,]+\.?\d*.*$/, '').trim();
+            
+            // If description is too short, try to extract more meaningful text from the original line
             if (description.length < 3) {
+              const originalLine = line.toLowerCase();
               // Look for common transaction types
-              if (line.toLowerCase().includes('mobile data')) description = 'Mobile Data';
-              else if (line.toLowerCase().includes('transfer')) description = 'Transfer';
-              else if (line.toLowerCase().includes('payment')) description = 'Payment';
-              else if (line.toLowerCase().includes('airtime')) description = 'Airtime';
+              if (originalLine.includes('mobile data')) description = 'Mobile Data';
+              else if (originalLine.includes('airtime')) description = 'Airtime';
+              else if (originalLine.includes('transfer from')) {
+                // Extract sender name
+                const transferMatch = originalLine.match(/transfer from ([^+\-\d]*)/);
+                description = transferMatch ? `Transfer from ${transferMatch[1].trim()}` : 'Transfer (Credit)';
+              }
+              else if (originalLine.includes('transfer to')) {
+                // Extract recipient name
+                const transferMatch = originalLine.match(/transfer to ([^+\-\d]*)/);
+                description = transferMatch ? `Transfer to ${transferMatch[1].trim()}` : 'Transfer (Debit)';
+              }
+              else if (originalLine.includes('payment')) description = 'Payment';
+              else if (originalLine.includes('levy')) description = 'Electronic Money Transfer Levy';
+              else if (originalLine.includes('pos transfer')) description = 'POS Transfer';
+              else if (originalLine.includes('certpay')) description = 'Certpay';
               else description = 'OPay Transaction';
             }
           } else {

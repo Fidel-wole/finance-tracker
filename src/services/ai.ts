@@ -313,41 +313,106 @@ The confidence should be between 0.0 and 1.0. If no clear merchant can be identi
     }
 
     try {
-      const totalTransactions = transactions.length;
-      const avgTransactionAmount = totalTransactions > 0 ? summary.totalExpenses / totalTransactions : 0;
+      const debitTransactions = transactions.filter(t => t.type === 'debit');
       
-      // Sample some transactions for analysis
-      const sampleTransactions = transactions.slice(0, 10).map(t => ({
-        description: t.description,
-        amount: t.amount,
-        type: t.type,
-        category: t.category
-      }));
+      // ANALYZE WHO/WHAT IS TAKING THEIR MONEY
+      
+      // 1. Find top recipients/merchants (WHO they're paying)
+      const recipientSpending = debitTransactions.reduce((acc, t) => {
+        const recipient = t.merchant || t.description.split(' ').slice(0, 3).join(' '); // First 3 words as recipient
+        acc[recipient] = (acc[recipient] || 0) + t.amount;
+        return acc;
+      }, {} as Record<string, number>);
+      
+      const topRecipients = Object.entries(recipientSpending)
+        .sort(([,a], [,b]) => (b as number) - (a as number))
+        .slice(0, 5)
+        .map(([name, amount]) => ({ name, amount: amount as number, percentage: Math.round(((amount as number) / summary.totalExpenses) * 100) }));
+      
+      // 2. Find top categories (WHAT they're spending on)
+      const categorySpending = debitTransactions.reduce((acc, t) => {
+        const category = t.category || 'Other';
+        acc[category] = (acc[category] || 0) + t.amount;
+        return acc;
+      }, {} as Record<string, number>);
+      
+      const topCategories = Object.entries(categorySpending)
+        .sort(([,a], [,b]) => (b as number) - (a as number))
+        .slice(0, 5)
+        .map(([name, amount]) => ({ name, amount: amount as number, percentage: Math.round(((amount as number) / summary.totalExpenses) * 100) }));
+      
+      // 3. Find largest individual transactions (BIGGEST money drains)
+      const biggestExpenses = debitTransactions
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 5)
+        .map(t => ({ 
+          description: t.description.substring(0, 40), 
+          amount: t.amount,
+          percentage: Math.round((t.amount / summary.totalExpenses) * 100)
+        }));
+
+      // 4. Find frequent transfer patterns (HIGH FREQUENCY recipients)
+      const transferFrequency = debitTransactions.reduce((acc, t) => {
+        const recipient = t.merchant || t.description.split(' ').slice(0, 3).join(' ');
+        if (!acc[recipient]) {
+          acc[recipient] = { count: 0, totalAmount: 0, transactions: [] };
+        }
+        acc[recipient].count++;
+        acc[recipient].totalAmount += t.amount;
+        acc[recipient].transactions.push(t.amount);
+        return acc;
+      }, {} as Record<string, { count: number; totalAmount: number; transactions: number[] }>);
+      
+      const frequentRecipients = Object.entries(transferFrequency)
+        .filter(([, data]) => (data as { count: number; totalAmount: number; transactions: number[] }).count >= 3) // 3 or more transactions
+        .sort(([,a], [,b]) => (b as { count: number; totalAmount: number; transactions: number[] }).count - (a as { count: number; totalAmount: number; transactions: number[] }).count)
+        .slice(0, 5)
+        .map(([name, data]) => ({ 
+          name, 
+          count: (data as { count: number; totalAmount: number; transactions: number[] }).count, 
+          totalAmount: (data as { count: number; totalAmount: number; transactions: number[] }).totalAmount,
+          avgAmount: Math.round((data as { count: number; totalAmount: number; transactions: number[] }).totalAmount / (data as { count: number; totalAmount: number; transactions: number[] }).count),
+          percentage: Math.round(((data as { count: number; totalAmount: number; transactions: number[] }).totalAmount / summary.totalExpenses) * 100)
+        }));
+
+      // 5. Analyze spending trends/patterns
+      const monthlyAvgExpense = summary.totalExpenses / (debitTransactions.length || 1);
+      const highValueThreshold = monthlyAvgExpense * 2; // Transactions 2x above average
+      const highValueCount = debitTransactions.filter(t => t.amount > highValueThreshold).length;
 
       const prompt = `
-Analyze this bank statement data and provide 3-5 unique, personalized financial insights. Make each insight specific and actionable.
+You are analyzing someone's spending to help them understand WHERE their money goes. Focus on WHO and WHAT is taking their money.
 
-Financial Summary:
-- Total transactions: ${totalTransactions}
-- Total income: ₦${summary.totalIncome?.toLocaleString()}
-- Total expenses: ₦${summary.totalExpenses?.toLocaleString()}
-- Net cash flow: ₦${summary.netCashFlow?.toLocaleString()}
-- Average transaction: ₦${avgTransactionAmount?.toLocaleString()}
+TOTAL EXPENSES: ₦${summary.totalExpenses?.toLocaleString()}
+TOTAL TRANSACTIONS: ${debitTransactions.length}
 
-Sample recent transactions:
-${JSON.stringify(sampleTransactions, null, 2)}
+TOP RECIPIENTS (Who you pay most):
+${topRecipients.map(r => `• ${r.name}: ₦${r.amount.toLocaleString()} (${r.percentage}% of total)`).join('\n')}
 
-Generate insights that are:
-1. Specific to this user's spending patterns
-2. Actionable and helpful
-3. Varied in focus (spending habits, savings opportunities, budgeting tips, etc.)
-4. Written in a conversational, helpful tone
-5. Include specific amounts where relevant
+TOP CATEGORIES (What you spend on most):
+${topCategories.map(c => `• ${c.name}: ₦${c.amount.toLocaleString()} (${c.percentage}% of total)`).join('\n')}
 
-Avoid generic statements. Each insight should feel personal and relevant.
+BIGGEST INDIVIDUAL EXPENSES:
+${biggestExpenses.map(e => `• ₦${e.amount.toLocaleString()} - ${e.description} (${e.percentage}% of total)`).join('\n')}
 
-Respond with ONLY a JSON array of strings:
-["insight 1", "insight 2", "insight 3", "insight 4"]
+FREQUENT TRANSFER RECIPIENTS (3+ transactions):
+${frequentRecipients.map(f => `• ${f.name}: ${f.count} transfers, ₦${f.totalAmount.toLocaleString()} total (avg ₦${f.avgAmount.toLocaleString()}/transfer)`).join('\n')}
+
+SPENDING PATTERNS:
+• Average transaction: ₦${Math.round(monthlyAvgExpense).toLocaleString()}
+• High-value transactions (₦${Math.round(highValueThreshold).toLocaleString()}+): ${highValueCount} transactions
+
+Generate 5 insights that help them realize:
+1. WHO takes most of their money (specific names with amounts and percentages)
+2. WHAT categories dominate their spending (with amounts and percentages)
+3. Biggest single expenses that drain their budget
+4. Frequent transfer patterns (people/services they pay repeatedly - even small amounts add up)
+5. Specific cost-cutting actions based on their patterns
+
+Be direct and specific. Use actual amounts and percentages. Focus on both HIGH-VALUE and HIGH-FREQUENCY spending patterns.
+
+Respond with ONLY a JSON array of 5 strings:
+["insight 1", "insight 2", "insight 3", "insight 4", "insight 5"]
 `;
 
       // Add timeout to prevent hanging - increased timeout for quality insights
@@ -379,12 +444,122 @@ Respond with ONLY a JSON array of strings:
         return Array.isArray(insights) ? insights : [content];
       }
 
-      throw new Error('AI service did not return valid insights');
+      // Fallback to manual insights if AI fails
+      return this.generateManualInsights(topRecipients, topCategories, biggestExpenses, frequentRecipients, summary);
 
     } catch (error) {
       console.error("Error generating statement insights:", error);
-      throw error; // Re-throw the error instead of using fallback
+      // Generate manual insights as fallback
+      const debitTransactions = transactions.filter(t => t.type === 'debit');
+      
+      const recipientSpending = debitTransactions.reduce((acc, t) => {
+        const recipient = t.merchant || t.description.split(' ').slice(0, 3).join(' ');
+        acc[recipient] = (acc[recipient] || 0) + t.amount;
+        return acc;
+      }, {} as Record<string, number>);
+      
+      const topRecipients = Object.entries(recipientSpending)
+        .sort(([,a], [,b]) => (b as number) - (a as number))
+        .slice(0, 5)
+        .map(([name, amount]) => ({ name, amount: amount as number, percentage: Math.round(((amount as number) / summary.totalExpenses) * 100) }));
+      
+      const categorySpending = debitTransactions.reduce((acc, t) => {
+        const category = t.category || 'Other';
+        acc[category] = (acc[category] || 0) + t.amount;
+        return acc;
+      }, {} as Record<string, number>);
+      
+      const topCategories = Object.entries(categorySpending)
+        .sort(([,a], [,b]) => (b as number) - (a as number))
+        .slice(0, 5)
+        .map(([name, amount]) => ({ name, amount: amount as number, percentage: Math.round(((amount as number) / summary.totalExpenses) * 100) }));
+      
+      const biggestExpenses = debitTransactions
+        .sort((a, b) => b.amount - a.amount)
+        .slice(0, 5)
+        .map(t => ({ 
+          description: t.description.substring(0, 40), 
+          amount: t.amount,
+          percentage: Math.round((t.amount / summary.totalExpenses) * 100)
+        }));
+
+      // Calculate frequent recipients for fallback
+      const transferFrequency = debitTransactions.reduce((acc, t) => {
+        const recipient = t.merchant || t.description.split(' ').slice(0, 3).join(' ');
+        if (!acc[recipient]) {
+          acc[recipient] = { count: 0, totalAmount: 0, transactions: [] };
+        }
+        acc[recipient].count++;
+        acc[recipient].totalAmount += t.amount;
+        acc[recipient].transactions.push(t.amount);
+        return acc;
+      }, {} as Record<string, { count: number; totalAmount: number; transactions: number[] }>);
+      
+      const frequentRecipients = Object.entries(transferFrequency)
+        .filter(([, data]) => (data as { count: number; totalAmount: number; transactions: number[] }).count >= 3)
+        .sort(([,a], [,b]) => (b as { count: number; totalAmount: number; transactions: number[] }).count - (a as { count: number; totalAmount: number; transactions: number[] }).count)
+        .slice(0, 5)
+        .map(([name, data]) => ({ 
+          name, 
+          count: (data as { count: number; totalAmount: number; transactions: number[] }).count, 
+          totalAmount: (data as { count: number; totalAmount: number; transactions: number[] }).totalAmount,
+          avgAmount: Math.round((data as { count: number; totalAmount: number; transactions: number[] }).totalAmount / (data as { count: number; totalAmount: number; transactions: number[] }).count),
+          percentage: Math.round(((data as { count: number; totalAmount: number; transactions: number[] }).totalAmount / summary.totalExpenses) * 100)
+        }));
+      
+      return this.generateManualInsights(topRecipients, topCategories, biggestExpenses, frequentRecipients, summary);
     }
+  }
+
+  // Generate insights manually when AI fails
+  private generateManualInsights(topRecipients: any[], topCategories: any[], biggestExpenses: any[], frequentRecipients: any[], summary: any): string[] {
+    const insights: string[] = [];
+    
+    // Insight 1: Top recipient/money drain (WHO)
+    if (topRecipients.length > 0) {
+      const topRecipient = topRecipients[0];
+      insights.push(`🚨 ${topRecipient.name} is your biggest money drain at ₦${topRecipient.amount.toLocaleString()} (${topRecipient.percentage}% of total expenses). Consider if this spending is necessary or can be reduced.`);
+    }
+    
+    // Insight 2: Top category analysis (WHAT)
+    if (topCategories.length > 0) {
+      const topCategory = topCategories[0];
+      if (topCategories.length > 1) {
+        const secondCategory = topCategories[1];
+        insights.push(`💰 Your top 2 spending categories are ${topCategory.name} (₦${topCategory.amount.toLocaleString()}, ${topCategory.percentage}%) and ${secondCategory.name} (₦${secondCategory.amount.toLocaleString()}, ${secondCategory.percentage}%). These two alone consume ${topCategory.percentage + secondCategory.percentage}% of your budget.`);
+      } else {
+        insights.push(`💰 ${topCategory.name} dominates your spending at ₦${topCategory.amount.toLocaleString()} (${topCategory.percentage}% of total expenses). Set strict limits for this category.`);
+      }
+    }
+    
+    // Insight 3: Biggest single expense
+    if (biggestExpenses.length > 0) {
+      const biggestExpense = biggestExpenses[0];
+      insights.push(`⚡ Your single largest expense was ₦${biggestExpense.amount.toLocaleString()} for "${biggestExpense.description}" - that's ${biggestExpense.percentage}% of your total spending in one transaction. Review if such large expenses align with your financial goals.`);
+    }
+    
+    // Insight 4: Frequent transfer patterns (HIGH FREQUENCY)
+    if (frequentRecipients.length > 0) {
+      const mostFrequent = frequentRecipients[0];
+      insights.push(`🔄 You transfer to ${mostFrequent.name} frequently (${mostFrequent.count} times, ₦${mostFrequent.avgAmount.toLocaleString()} average). These small but frequent transfers total ₦${mostFrequent.totalAmount.toLocaleString()} (${mostFrequent.percentage}% of expenses). Consider if these are necessary or can be consolidated.`);
+    }
+    
+    // Insight 5: Cost-cutting action based on patterns
+    if (insights.length < 5) {
+      if (topRecipients.length > 2) {
+        const top3Total = topRecipients.slice(0, 3).reduce((sum, r) => sum + r.amount, 0);
+        const top3Percentage = Math.round((top3Total / summary.totalExpenses) * 100);
+        insights.push(`📊 Your top 3 recipients (${topRecipients.slice(0, 3).map(r => r.name).join(', ')}) receive ${top3Percentage}% of your money. Focus on negotiating better rates or reducing payments to these to see significant savings.`);
+      } else if (frequentRecipients.length > 1) {
+        const totalFrequentTransfers = frequentRecipients.reduce((sum, r) => sum + r.totalAmount, 0);
+        const freqPercentage = Math.round((totalFrequentTransfers / summary.totalExpenses) * 100);
+        insights.push(`🎯 You have ${frequentRecipients.length} recipients you pay frequently. Combined, these frequent transfers represent ₦${totalFrequentTransfers.toLocaleString()} (${freqPercentage}% of expenses). Consider setting monthly limits for these recurring payments.`);
+      } else {
+        insights.push(`💡 Based on your spending pattern, focus on your top expense categories and largest individual transactions. Even a 10% reduction in your biggest spending areas could save you significant money.`);
+      }
+    }
+    
+    return insights.slice(0, 5); // Return exactly 5 insights
   }
 
   private fallbackCategorization(description: string): { category: string; confidence: number } {

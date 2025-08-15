@@ -519,16 +519,15 @@ export default class BankStatementService {
 
     // Enhanced processing with better timeout management
     const BATCH_SIZE = 2; // Reduced to minimize API load
-    const MAX_AI_TRANSACTIONS = Math.min(50, uniqueTransactions.length); // Limit AI calls for very large datasets
     let consecutiveFailures = 0;
     const MAX_CONSECUTIVE_FAILURES = 3; // Stricter circuit breaker
-    const AI_PROCESSING_TIMEOUT = 60000; // 1 minute max for AI processing
+    const AI_PROCESSING_TIMEOUT = 180000; // 3 minutes max for AI processing (increased for all transactions)
     const startTime = Date.now();
     
-    console.log(`Will process max ${MAX_AI_TRANSACTIONS} unique transactions with AI, remaining will use fallback`);
+    console.log(`Processing all ${uniqueTransactions.length} unique transactions with AI (no fallback)`);
     
-    // Process limited number of unique transactions with AI
-    for (let i = 0; i < Math.min(MAX_AI_TRANSACTIONS, uniqueTransactions.length); i += BATCH_SIZE) {
+    // Process ALL unique transactions with AI
+    for (let i = 0; i < uniqueTransactions.length; i += BATCH_SIZE) {
       // Check if we've exceeded AI processing timeout
       if (Date.now() - startTime > AI_PROCESSING_TIMEOUT) {
         console.log(`AI processing timeout reached. Using fallback for remaining ${uniqueTransactions.length - i} transactions.`);
@@ -566,7 +565,7 @@ export default class BankStatementService {
           });
           
           consecutiveFailures = 0; // Reset failure counter on success
-          console.log(`Successfully processed AI categorization ${i + 1}/${Math.min(MAX_AI_TRANSACTIONS, uniqueTransactions.length)}`);
+          console.log(`Successfully processed AI categorization ${i + 1}/${uniqueTransactions.length}`);
           
         } catch (error) {
           consecutiveFailures++;
@@ -585,29 +584,13 @@ export default class BankStatementService {
       }
 
       // Moderate delay between batches
-      if (i + BATCH_SIZE < Math.min(MAX_AI_TRANSACTIONS, uniqueTransactions.length) && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
+      if (i + BATCH_SIZE < uniqueTransactions.length && consecutiveFailures < MAX_CONSECUTIVE_FAILURES) {
         await new Promise(resolve => setTimeout(resolve, 1000));
       }
     }
 
-    // Apply fallback categorization to any remaining unique transactions not processed by AI
-    const processedCount = aiCategorizationMap.size;
-    const remainingTransactions = uniqueTransactions.slice(processedCount);
-    
-    if (remainingTransactions.length > 0) {
-      console.log(`Applying fallback categorization to ${remainingTransactions.length} remaining unique transactions`);
-      
-      remainingTransactions.forEach(transaction => {
-        const normalizedDesc = this.normalizeDescription(transaction.description);
-        if (!aiCategorizationMap.has(normalizedDesc)) {
-          aiCategorizationMap.set(normalizedDesc, {
-            category: this.basicCategorization(transaction.description),
-            merchant: this.extractMerchantFromDescription(transaction.description),
-            confidence: 0.3
-          });
-        }
-      });
-    }
+    // All transactions are now processed with AI (no fallback needed)
+    console.log(`AI processing complete. Processed ${aiCategorizationMap.size} unique transaction patterns.`);
 
     // Apply categorization to all transactions based on patterns
     const categorizedTransactions: (ExtractedTransaction & { category?: string; merchant?: string; confidence?: number })[] = [];
